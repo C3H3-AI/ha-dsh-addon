@@ -1,0 +1,10 @@
+build_from:
+  aarch64: "ghcr.io/home-assistant/aarch64-base:latest"
+  amd64: "ghcr.io/home-assistant/amd64-base:latest"
+  armv7: "ghcr.io/home-assistant/armv7-base:latest"
+labels:
+  maintainer: "DeepSeek Harness HA Addon"
+  org.opencontainers.image.title: "DeepSeek Harness for Home Assistant"
+  org.opencontainers.image.description: "DeepSeek Harness - 开源 AI Agent 运行框架"
+  org.opencontainers.image.source: "https://github.com/deepseek-ai/deepseek-harness"
+  org.opencontainers.image.version: "0.1.0"
