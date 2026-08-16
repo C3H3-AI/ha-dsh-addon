@@ -1,4 +1,3 @@
-ARG BUILD_FROM
 ARG BUILD_VERSION="0.1.1"
 ARG BUILD_ARCH="amd64"
 
@@ -7,7 +6,7 @@ ARG BUILD_ARCH="amd64"
 # 不使用 HA 基础镜像（避免 s6-overlay PID 1 限制）
 # 配置通过 /data/options.json 读取（HA Supervisor 挂载）
 # ============================================================
-FROM $BUILD_FROM
+FROM node:22-alpine
 
 # Labels
 LABEL \
@@ -16,15 +15,7 @@ LABEL \
     io.hass.type="addon" \
     io.hass.name="DeepSeek Harness" \
     io.hass.description="DeepSeek Harness - 开源 AI Agent 运行框架，一切皆插件" \
-    io.hass.url="https://github.com/deepseek-ai/deepseek-harness" \
-    maintainer="DeepSeek Harness HA Addon" \
-    org.opencontainers.image.title="DeepSeek Harness for Home Assistant" \
-    org.opencontainers.image.description="DeepSeek Harness - 开源 AI Agent 运行框架" \
-    org.opencontainers.image.source="https://github.com/deepseek-ai/deepseek-harness" \
-    org.opencontainers.image.version="${BUILD_VERSION}"
-
-# 设置 shell
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+    io.hass.url="https://github.com/deepseek-ai/deepseek-harness"
 
 # 使用国内镜像源加速
 RUN sed -i 's|dl-cdn.alpinelinux.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apk/repositories
