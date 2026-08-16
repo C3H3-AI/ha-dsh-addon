@@ -74,8 +74,5 @@ sleep 1
 echo "[DSH Addon] Starting DeepSeek Harness Web UI..."
 cd "${DSH_WORKSPACE}" || true
 
-if [ "${AUTO_START}" = "true" ]; then
-    exec dsh web --preset "${PRESET}"
-else
-    exec dsh web
-fi
+# 注意：dsh web 不支持 --preset 参数，直接启动
+exec dsh web
