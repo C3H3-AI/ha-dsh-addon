@@ -20,11 +20,13 @@ LABEL \
     org.opencontainers.image.source="https://github.com/deepseek-ai/deepseek-harness" \
     org.opencontainers.image.version="${BUILD_VERSION}"
 
-# 安装依赖：Node.js 22+、socat（端口转发）、其他工具
+# 安装依赖：Node.js 22+、构建工具（编译 native 模块）、socat（端口转发）
 # HA 基础镜像基于 Alpine，Node.js 22.x 在 community 仓库
 RUN apk add --no-cache \
         nodejs \
         npm \
+        build-base \
+        python3 \
         socat \
         bash \
         curl \
