@@ -28,8 +28,8 @@ echo "[DSH Addon]   Preset: ${PRESET}"
 export DEEPSEEK_API_KEY="${API_KEY}"
 export DSH_HOME="/root/.dsh"
 
-# dsh 的 HMR 插件需要 --expose-internals 标志
-export NODE_OPTIONS="--expose-internals"
+# 注意：--expose-internals 不能在 NODE_OPTIONS 中设置，必须作为命令行参数传递
+# 找到 dsh 的实际路径并用 node 直接调用
 
 # 如果配置了 base_url，设置模型端点
 if [ -n "${BASE_URL}" ]; then
@@ -78,4 +78,6 @@ echo "[DSH Addon] Starting DeepSeek Harness Web UI..."
 cd "${DSH_WORKSPACE}" || true
 
 # 注意：dsh web 不支持 --preset 参数，直接启动
-exec dsh web
+# dsh 的 HMR 插件需要 --expose-internals 标志，必须通过 node 命令行参数传递
+DSH_BIN=$(which dsh)
+exec node --expose-internals "${DSH_BIN}" web
