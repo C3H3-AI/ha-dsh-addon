@@ -39,6 +39,9 @@ RUN apk add --no-cache \
 RUN npm config set registry https://registry.npmmirror.com \
     && npm install -g @deepseek-ai/dsh
 
+# dsh 的 HMR 插件需要 --expose-internals 标志
+ENV NODE_OPTIONS="--expose-internals"
+
 # 拷贝启动脚本
 COPY run.sh /run.sh
 RUN chmod a+x /run.sh
