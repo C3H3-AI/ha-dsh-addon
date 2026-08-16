@@ -60,9 +60,21 @@ COPY --from=dsh-builder /usr/local/bin/dsh /usr/local/bin/dsh
 COPY run.sh /run.sh
 RUN chmod a+x /run.sh
 
+# ============================================================
+# 配置 s6-overlay 服务
+# s6-overlay 是 HA 基础镜像的 init 系统，bashio 依赖它运作
+# 服务必须注册为 s6-rc service 而非直接作为 CMD
+# ============================================================
+RUN mkdir -p /etc/s6-overlay/s6-rc.d/addon \
+    && echo "longrun" > /etc/s6-overlay/s6-rc.d/addon/type \
+    && echo "#!/usr/bin/execlineb -P" > /etc/s6-overlay/s6-rc.d/addon/run \
+    && echo "/run.sh" >> /etc/s6-overlay/s6-rc.d/addon/run \
+    && chmod a+x /etc/s6-overlay/s6-rc.d/addon/run \
+    && mkdir -p /etc/s6-overlay/s6-rc.d/user/contents.d \
+    && echo "addon" > /etc/s6-overlay/s6-rc.d/user/contents.d/addon
+
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD wget -qO- http://127.0.0.1:3080 || exit 1
 
 WORKDIR /config
-CMD [ "/run.sh" ]
