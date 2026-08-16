@@ -28,6 +28,9 @@ echo "[DSH Addon]   Preset: ${PRESET}"
 export DEEPSEEK_API_KEY="${API_KEY}"
 export DSH_HOME="/root/.dsh"
 
+# dsh 的 HMR 插件需要 --expose-internals 标志
+export NODE_OPTIONS="--expose-internals"
+
 # 如果配置了 base_url，设置模型端点
 if [ -n "${BASE_URL}" ]; then
     export DEEPSEEK_BASE_URL="${BASE_URL}"
