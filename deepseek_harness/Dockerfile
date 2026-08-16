@@ -3,29 +3,11 @@ ARG BUILD_VERSION="0.1.0"
 ARG BUILD_ARCH="amd64"
 
 # ============================================================
-# Stage 1: 构建阶段 - 使用 node:22-alpine 预编译 dsh
-# ============================================================
-FROM node:22-alpine AS dsh-builder
-
-# 使用国内镜像源加速
-RUN sed -i 's|dl-cdn.alpinelinux.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apk/repositories
-
-# 安装构建工具（编译 native 模块需要）
-RUN apk add --no-cache build-base python3
-
-# 配置 npm 镜像并安装 @deepseek-ai/dsh
-RUN npm config set registry https://registry.npmmirror.com \
-    && npm install -g @deepseek-ai/dsh --ignore-scripts=false
-
-# ============================================================
-# Stage 2: 最终镜像 - 使用 HA 基础镜像，拷贝 dsh 成品
-# 不使用 bashio（避免 s6-overlay-suexec PID 1 限制），
-# 直接用解析 /data/options.json 的方式读取配置
+# 单阶段构建：直接使用 node:22-alpine 作为基础镜像
+# 不使用 HA 基础镜像（避免 s6-overlay PID 1 限制）
+# 配置通过 /data/options.json 读取（HA Supervisor 挂载）
 # ============================================================
 FROM $BUILD_FROM
-
-# 设置 shell
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # Labels
 LABEL \
@@ -41,11 +23,15 @@ LABEL \
     org.opencontainers.image.source="https://github.com/deepseek-ai/deepseek-harness" \
     org.opencontainers.image.version="${BUILD_VERSION}"
 
+# 设置 shell
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
 # 使用国内镜像源加速
 RUN sed -i 's|dl-cdn.alpinelinux.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apk/repositories
 
-# 安装运行时依赖（仅需 nodejs，不需要 build-base/gcc）
-# jq 用于解析 /data/options.json（替代 bashio）
+# 安装运行时依赖
+# socat: 端口转发（dsh 只监听 127.0.0.1）
+# jq: 解析 /data/options.json（替代 bashio）
 RUN apk add --no-cache \
         nodejs \
         npm \
@@ -54,11 +40,13 @@ RUN apk add --no-cache \
         curl \
         wget \
         jq \
+        build-base \
+        python3 \
     && mkdir -p /root/.dsh
 
-# 从构建阶段拷贝预编译的 dsh 及其依赖
-COPY --from=dsh-builder /usr/local/lib/node_modules /usr/local/lib/node_modules
-COPY --from=dsh-builder /usr/local/bin/dsh /usr/local/bin/dsh
+# 配置 npm 镜像并安装 @deepseek-ai/dsh
+RUN npm config set registry https://registry.npmmirror.com \
+    && npm install -g @deepseek-ai/dsh
 
 # 拷贝启动脚本
 COPY run.sh /run.sh
