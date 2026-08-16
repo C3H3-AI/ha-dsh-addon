@@ -19,6 +19,8 @@ RUN npm config set registry https://registry.npmmirror.com \
 
 # ============================================================
 # Stage 2: 最终镜像 - 使用 HA 基础镜像，拷贝 dsh 成品
+# 不使用 bashio（避免 s6-overlay-suexec PID 1 限制），
+# 直接用解析 /data/options.json 的方式读取配置
 # ============================================================
 FROM $BUILD_FROM
 
@@ -43,6 +45,7 @@ LABEL \
 RUN sed -i 's|dl-cdn.alpinelinux.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apk/repositories
 
 # 安装运行时依赖（仅需 nodejs，不需要 build-base/gcc）
+# jq 用于解析 /data/options.json（替代 bashio）
 RUN apk add --no-cache \
         nodejs \
         npm \
@@ -50,6 +53,7 @@ RUN apk add --no-cache \
         bash \
         curl \
         wget \
+        jq \
     && mkdir -p /root/.dsh
 
 # 从构建阶段拷贝预编译的 dsh 及其依赖
@@ -60,21 +64,9 @@ COPY --from=dsh-builder /usr/local/bin/dsh /usr/local/bin/dsh
 COPY run.sh /run.sh
 RUN chmod a+x /run.sh
 
-# ============================================================
-# 配置 s6-overlay 服务
-# s6-overlay 是 HA 基础镜像的 init 系统，bashio 依赖它运作
-# 服务必须注册为 s6-rc service 而非直接作为 CMD
-# ============================================================
-RUN mkdir -p /etc/s6-overlay/s6-rc.d/addon \
-    && echo "longrun" > /etc/s6-overlay/s6-rc.d/addon/type \
-    && echo "#!/usr/bin/execlineb -P" > /etc/s6-overlay/s6-rc.d/addon/run \
-    && echo "/run.sh" >> /etc/s6-overlay/s6-rc.d/addon/run \
-    && chmod a+x /etc/s6-overlay/s6-rc.d/addon/run \
-    && mkdir -p /etc/s6-overlay/s6-rc.d/user/contents.d \
-    && echo "addon" > /etc/s6-overlay/s6-rc.d/user/contents.d/addon
-
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD wget -qO- http://127.0.0.1:3080 || exit 1
 
 WORKDIR /config
+CMD [ "/run.sh" ]
