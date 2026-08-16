@@ -20,6 +20,9 @@ LABEL \
     org.opencontainers.image.source="https://github.com/deepseek-ai/deepseek-harness" \
     org.opencontainers.image.version="${BUILD_VERSION}"
 
+# 使用国内镜像源加速
+RUN sed -i 's|dl-cdn.alpinelinux.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apk/repositories
+
 # 安装依赖：Node.js 22+、构建工具（编译 native 模块）、socat（端口转发）
 # HA 基础镜像基于 Alpine，Node.js 22.x 在 community 仓库
 RUN apk add --no-cache \
@@ -31,7 +34,8 @@ RUN apk add --no-cache \
         bash \
         curl \
         wget \
-    && npm install -g @deepseek-ai/dsh \
+    && npm config set registry https://registry.npmmirror.com \
+    && npm install -g @deepseek-ai/dsh --ignore-scripts=false \
     && mkdir -p /root/.dsh
 
 # 拷贝启动脚本
