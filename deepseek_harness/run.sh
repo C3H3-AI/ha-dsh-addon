@@ -63,21 +63,11 @@ providers:
 EOCONFIG
 fi
 
-# 启动 socat 端口转发（0.0.0.0:3080 → 127.0.0.1:3080）
-# DSH 出于安全原因拒绝监听 0.0.0.0，通过 socat 让 ingress 可访问
-echo "[DSH Addon] Starting socat port forwarder (0.0.0.0:3080 → 127.0.0.1:3080)..."
-socat TCP-LISTEN:3080,fork,reuseaddr TCP:127.0.0.1:3080 &
-SOCAT_PID=$!
-echo "[DSH Addon] socat started (PID: ${SOCAT_PID})"
-
-# 延迟一小段时间让 DSH 有机会绑定 127.0.0.1:3080
-sleep 1
-
-# 启动 DeepSeek Harness Web UI
+# 启动 DeepSeek Harness Web UI（直接监听 0.0.0.0:3080，无需 socat 转发）
 echo "[DSH Addon] Starting DeepSeek Harness Web UI..."
 cd "${DSH_WORKSPACE}" || true
 
-# 注意：dsh web 不支持 --preset 参数，直接启动
-# dsh 的 HMR 插件需要 --expose-internals 标志，必须通过 node 命令行参数传递
+# 注意：dsh 的 HMR 插件需要 --expose-internals 标志，必须通过 node 命令行参数传递
+# --host 0.0.0.0 让 DSH 监听所有接口，HA Ingress 可直接访问
 DSH_BIN=$(which dsh)
-exec node --expose-internals "${DSH_BIN}" web
+exec node --expose-internals "${DSH_BIN}" --profile web --host 0.0.0.0
