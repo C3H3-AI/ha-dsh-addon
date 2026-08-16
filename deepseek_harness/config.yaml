@@ -6,7 +6,6 @@ url: "https://github.com/deepseek-ai/deepseek-harness"
 arch:
   - aarch64
   - amd64
-  - armv7
 startup: "application"
 boot: "auto"
 ingress: true
