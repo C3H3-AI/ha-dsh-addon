@@ -17,7 +17,7 @@ hassio_api: true
 ports:
   3080/tcp: 3080
 ports_description:
-  3080/tcp: "DSH Web UI（可选，ingress 已内置）"
+  3080/tcp: "DSH Web UI（可选，ingress 已内置，不需要打开此端口）"
 map:
   - config:rw
 options:
