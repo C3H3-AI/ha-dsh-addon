@@ -21,14 +21,17 @@ LABEL \
 # 使用国内镜像源加速
 RUN sed -i 's|dl-cdn.alpinelinux.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apk/repositories
 
-# 安装运行时依赖
+# 安装运行时依赖和编译工具
 # jq: 解析 /data/options.json（替代 bashio）
+# build-base + python3: node-gyp 编译原生模块（node-pty 需要）
 # socat 不再需要（DSH 使用 --host 0.0.0.0 直接监听所有接口）
 RUN apk add --no-cache \
         bash \
         curl \
         wget \
         jq \
+        python3 \
+        build-base \
     && mkdir -p /root/.dsh
 
 # 使用国内 npm 镜像安装 @deepseek-ai/dsh
