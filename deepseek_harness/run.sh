@@ -123,18 +123,10 @@ else
     echo "[DSH Addon] HA MCP disabled (set ha_mcp_enabled=true + ha_mcp_url to enable)"
 fi
 
-# ===== 自动更新 DSH 到最新版本 =====
-# 每次启动时检查并更新 @deepseek-ai/dsh，避免每次上游更新都需要重新编译镜像
-# 使用 --prefer-offline 减少网络请求，如果失败则继续使用已有版本
-echo "[DSH Addon] Checking for DSH updates..."
-CURRENT_DSH_VER=$(node -e "console.log(require('${DSH_BIN%bin.js}../package.json').version || 'unknown')" 2>/dev/null || echo "unknown")
-npm update -g @deepseek-ai/dsh 2>/dev/null || true
-NEW_DSH_VER=$(node -e "console.log(require('${DSH_BIN%bin.js}../package.json').version || 'unknown')" 2>/dev/null || echo "unknown")
-if [ "${CURRENT_DSH_VER}" != "${NEW_DSH_VER}" ]; then
-    echo "[DSH Addon] DSH updated: ${CURRENT_DSH_VER} -> ${NEW_DSH_VER}"
-else
-    echo "[DSH Addon] DSH version: ${CURRENT_DSH_VER} (no update needed)"
-fi
+# ===== 检查 DSH 版本（仅显示，不自动更新）=====
+# 注意：npm update -g 会破坏 DSH 包，导致容器循环重启
+# 上游更新后需要重新构建 Docker 镜像来更新 DSH
+echo "[DSH Addon] DSH version: $(node -e "console.log(require('${DSH_BIN%bin.js}../package.json').version || 'unknown')" 2>/dev/null || echo 'unknown')"
 
 # 注意：DSH 安全限制，不允许绑定 0.0.0.0（安全原因：会暴露远程代码执行到网络）
 # 因此策略是：DSH 监听 127.0.0.1:3081，再启动 Node.js TCP 代理监听 0.0.0.0:3080 转发到 127.0.0.1:3081
