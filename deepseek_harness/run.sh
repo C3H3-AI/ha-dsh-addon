@@ -108,15 +108,18 @@ if [ "${HA_MCP_ENABLED}" = "true" ] && [ -n "${HA_MCP_URL}" ]; then
     echo "[DSH Addon] HA MCP enabled -> writing Home-level cordis patch..."
     cat > "${DSH_HOME}/cordis.patch.yml" << EOMCP
 # 注入 HA MCP 客户端插件（Home 级 patch，自动加载）
-plugins:
-  mcp-client-ha:
-    transport: streamable-http
-    serverName: ha
-    url: "${HA_MCP_URL}"
-    headers:
-      Authorization: "Bearer ${HA_MCP_TOKEN}"
-    toolCallTimeoutMs: 120000
-    failOnStartupError: false
+# DSH 装配系统要求 patch 文件为顶层 YAML 数组格式
+- insert:
+    - id: mcp-client-ha
+      name: mcp-client-ha
+      config:
+        transport: streamable-http
+        serverName: ha
+        url: "${HA_MCP_URL}"
+        headers:
+          Authorization: "Bearer ${HA_MCP_TOKEN}"
+        toolCallTimeoutMs: 120000
+        failOnStartupError: false
 EOMCP
     echo "[DSH Addon]   MCP patch: ${DSH_HOME}/cordis.patch.yml"
 else
