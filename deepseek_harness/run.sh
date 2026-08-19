@@ -257,24 +257,84 @@ const server = http.createServer((req, res) => {
                 // 注入 Ingress 路径修复脚本：patch fetch 和 WebSocket 以使用正确的 Ingress 路径
                 // 关键：DSH 客户端代码使用 new URL(path, location.origin) 构造 URL 对象，
                 // 然后直接传给 fetch(new URL(...))，所以 url 参数是 URL 对象，不是字符串！
-                // typeof URL 对象 === "object"，所以之前用 typeof === "string" 判断永远不匹配
-                // 注入移动端响应式样式 + 脚本：侧边栏浮动覆盖，主内容区全宽
+                // 注入移动端响应式样式 + 脚本
+                // 核心思路：三栏布局变为上下滚动布局，弹窗/对话框覆盖全屏
                 const mobileCss = [
                     '<style>',
                     '@media (max-width: 768px) {',
+                    // 侧边栏：从左侧滑入的浮动面板
                     '  div[class*="sidebarCol"] {',
                     '    position: fixed !important;',
                     '    left: 0 !important;',
                     '    top: 0 !important;',
                     '    z-index: 1000 !important;',
                     '    height: 100% !important;',
-                    '    transition: transform 0.2s ease !important;',
+                    '    width: 280px !important;',
+                    '    transform: translateX(-100%) !important;',
+                    '    transition: transform 0.25s ease !important;',
+                    '    box-shadow: 2px 0 12px rgba(0,0,0,0.3) !important;',
                     '  }',
+                    '  div[class*="sidebarCol"][data-mobile-open="true"] {',
+                    '    transform: translateX(0) !important;',
+                    '  }',
+                    // 侧边栏打开时的遮罩层
+                    '  #dsh-mobile-mask {',
+                    '    position: fixed !important;',
+                    '    inset: 0 !important;',
+                    '    z-index: 999 !important;',
+                    '    background: rgba(0,0,0,0.4) !important;',
+                    '    display: none !important;',
+                    '  }',
+                    '  #dsh-mobile-mask[data-visible="true"] {',
+                    '    display: block !important;',
+                    '  }',
+                    // 主内容区：全宽
                     '  div[class*="centerCol"] {',
                     '    margin-left: 0 !important;',
                     '    width: 100% !important;',
+                    '    min-width: 0 !important;',
                     '  }',
-                    '  div[class*="detailsCol"] { display: none !important; }',
+                    // 右侧详情面板：全屏浮动弹窗
+                    '  div[class*="detailsCol"] {',
+                    '    position: fixed !important;',
+                    '    left: 0 !important;',
+                    '    top: 0 !important;',
+                    '    z-index: 1100 !important;',
+                    '    width: 100% !important;',
+                    '    height: 100% !important;',
+                    '    max-width: 100% !important;',
+                    '    transform: translateX(100%) !important;',
+                    '    transition: transform 0.25s ease !important;',
+                    '    box-shadow: -2px 0 12px rgba(0,0,0,0.3) !important;',
+                    '    overflow-y: auto !important;',
+                    '    -webkit-overflow-scrolling: touch !important;',
+                    '  }',
+                    '  div[class*="detailsCol"][data-mobile-open="true"] {',
+                    '    transform: translateX(0) !important;',
+                    '  }',
+                    // 详情面板关闭按钮
+                    '  #dsh-details-close {',
+                    '    position: fixed !important;',
+                    '    top: 8px !important;',
+                    '    right: 8px !important;',
+                    '    z-index: 1101 !important;',
+                    '    width: 36px !important;',
+                    '    height: 36px !important;',
+                    '    border: none !important;',
+                    '    border-radius: 8px !important;',
+                    '    background: var(--bg-surface, #2b2d31) !important;',
+                    '    color: var(--fg-default, #fff) !important;',
+                    '    font-size: 20px !important;',
+                    '    cursor: pointer !important;',
+                    '    display: none !important;',
+                    '    align-items: center !important;',
+                    '    justify-content: center !important;',
+                    '    box-shadow: 0 2px 8px rgba(0,0,0,0.3) !important;',
+                    '  }',
+                    '  #dsh-details-close[data-visible="true"] {',
+                    '    display: flex !important;',
+                    '  }',
+                    // 汉堡菜单按钮
                     '  #dsh-mobile-toggle {',
                     '    position: fixed !important;',
                     '    left: 8px !important;',
@@ -293,83 +353,171 @@ const server = http.createServer((req, res) => {
                     '    justify-content: center !important;',
                     '    box-shadow: 0 2px 8px rgba(0,0,0,0.3) !important;',
                     '  }',
+                    // 通用弹窗/对话框：全屏覆盖
+                    '  div[class*="dialog"], div[role="dialog"], div[class*="modal"] {',
+                    '    position: fixed !important;',
+                    '    left: 0 !important;',
+                    '    top: 0 !important;',
+                    '    z-index: 1200 !important;',
+                    '    width: 100% !important;',
+                    '    height: 100% !important;',
+                    '    max-width: 100% !important;',
+                    '    max-height: 100% !important;',
+                    '    margin: 0 !important;',
+                    '    border-radius: 0 !important;',
+                    '    overflow-y: auto !important;',
+                    '    -webkit-overflow-scrolling: touch !important;',
+                    '  }',
+                    '  div[class*="dialog"] > :first-child,',
+                    '  div[role="dialog"] > :first-child {',
+                    '    max-width: 100% !important;',
+                    '    width: 100% !important;',
+                    '    margin: 0 !important;',
+                    '    border-radius: 0 !important;',
+                    '    height: 100% !important;',
+                    '  }',
+                    // 底部安全区域
+                    '  body {',
+                    '    padding-bottom: env(safe-area-inset-bottom, 0px) !important;',
+                    '  }',
                     '}',
                     '</style>'
                 ].join('\n');
 
-                // 移动端侧边栏切换脚本
-                // 使用 MutationObserver 等待 SPA 渲染完成后操作 DOM，避免 IIFE 执行时元素不存在
-                // 注意：querySelector 参数使用单引号包裹，避免双引号嵌套导致 JS 语法错误
+                // 移动端交互脚本
+                // 使用 MutationObserver 等待 SPA 渲染完成后操作 DOM
+                // 功能：侧边栏滑动切换、详情面板全屏展示、弹窗适配
                 const mobileToggleScript = [
                     '<script>',
                     '(function(){',
                     '  if (window.innerWidth > 768) return;',
-                    '  var MOBILE_OBSERVER = new MutationObserver(function() {',
+                    '  var M_OBSERVER = new MutationObserver(function() {',
                     "    var frame = document.querySelector('[class*=\"frame\"]');",
                     "    var sidebar = document.querySelector('[class*=\"sidebarCol\"]');",
+                    "    var details = document.querySelector('[class*=\"detailsCol\"]');",
+                    "    var center = document.querySelector('[class*=\"centerCol\"]');",
                     '    if (!frame || !sidebar) return;',
-                    '    MOBILE_OBSERVER.disconnect();',
+                    '    M_OBSERVER.disconnect();',
+                    // 设置网格布局：侧边栏宽度固定为 0，由 CSS 控制
                     '    var origGrid = frame.style.gridTemplateColumns || "";',
                     '    var parts = origGrid.split(/\\s+/);',
                     '    if (parts.length >= 3) {',
                     '      parts[0] = "0px";',
+                    '      parts[2] = "0px";',
                     '      frame.style.gridTemplateColumns = parts.join(" ");',
                     '    }',
-                    '    sidebar.style.position = "fixed";',
-                    '    sidebar.style.left = "0";',
-                    '    sidebar.style.top = "0";',
-                    '    sidebar.style.zIndex = "1000";',
-                    '    sidebar.style.height = "100%";',
-                    '    sidebar.style.transform = "translateX(-100%)";',
-                    '    sidebar.style.transition = "transform 0.2s ease";',
+                    // 侧边栏由 CSS 控制，只需设置 data 属性
+                    // 创建遮罩层
+                    "    var mask = document.createElement('div');",
+                    '    mask.id = "dsh-mobile-mask";',
+                    '    mask.onclick = function() {',
+                    '      sidebar.dataset.mobileOpen = "false";',
+                    '      mask.dataset.visible = "false";',
+                    '    };',
+                    '    document.body.appendChild(mask);',
+                    // 汉堡菜单按钮
                     "    var btn = document.createElement('button');",
                     '    btn.id = "dsh-mobile-toggle";',
                     '    btn.textContent = "☰";',
                     '    btn.onclick = function() {',
-                    '      var cur = sidebar.style.transform;',
-                    "      sidebar.style.transform = cur === 'translateX(0px)' ? 'translateX(-100%)' : 'translateX(0px)';",
+                    '      var isOpen = sidebar.dataset.mobileOpen === "true";',
+                    '      sidebar.dataset.mobileOpen = isOpen ? "false" : "true";',
+                    '      mask.dataset.visible = isOpen ? "false" : "true";',
                     '    };',
                     '    document.body.appendChild(btn);',
+                    // 详情面板全屏适配
+                    '    if (details) {',
+                    '      details.dataset.mobileOpen = "false";',
+                    // 监听详情面板的 style.display 变化（DSH 控制显示/隐藏）
+                    "      var detailsObserver = new MutationObserver(function() {",
+                    '        var d = details.style.display;',
+                    '        if (d && d !== "none") {',
+                    '          details.dataset.mobileOpen = "true";',
+                    '          closeBtn.dataset.visible = "true";',
+                    '          center.style.display = "none";',
+                    '        } else {',
+                    '          details.dataset.mobileOpen = "false";',
+                    '          closeBtn.dataset.visible = "false";',
+                    '          center.style.display = "";',
+                    '        }',
+                    '      });',
+                    "      detailsObserver.observe(details, { attributes: true, attributeFilter: ['style'] });",
+                    // 详情面板关闭按钮
+                    "      var closeBtn = document.createElement('button');",
+                    '      closeBtn.id = "dsh-details-close";',
+                    '      closeBtn.textContent = "✕";',
+                    '      closeBtn.dataset.visible = "false";',
+                    '      closeBtn.onclick = function() {',
+                    '        details.style.display = "none";',
+                    '        details.dataset.mobileOpen = "false";',
+                    '        closeBtn.dataset.visible = "false";',
+                    '        center.style.display = "";',
+                    '      };',
+                    '      document.body.appendChild(closeBtn);',
+                    '    }',
                     '  });',
-                    '  MOBILE_OBSERVER.observe(document.body, { childList: true, subtree: true });',
-                    "  setTimeout(function() { MOBILE_OBSERVER.disconnect(); }, 15000);",
+                    '  M_OBSERVER.observe(document.body, { childList: true, subtree: true });',
+                    "  setTimeout(function() { M_OBSERVER.disconnect(); }, 15000);",
                     '})();',
                     '</script>'
                 ].join('\n');
 
-                // 自动关闭 "Internal Testing Notice" 弹窗 + 强制设置中文语言
-                // 使用 MutationObserver 等待弹窗出现后自动关闭，同时设置中文语言偏好
-                const dismissDialogScript = [
+                // ===== 核心修复：让 DSH 客户端认为运行在 loopback 环境 =====
+                // DSH 通过检查 location.hostname 判断是否为回环地址：
+                //   - 是回环地址 → isLoopback = true → 持久化到后端（可保存）
+                //   - 非回环地址 → isLoopback = false → 仅存内存（刷新丢失）
+                // HA Ingress 的 hostname 是 api.homediy.top，不是回环地址
+                // 所以：弹窗状态、语言设置等所有配置都存不住
+                // 修复：在 DSH 客户端模块加载前，劫持 hostname 返回 127.0.0.1
+                //
+                // 关键：在 Chromium 中，window.location 是直接定义在 window 上的不可配置(non-configurable)属性，
+                // 之前的 Window.prototype 方式无法获取到描述符，导致脚本静默失败。
+                // 正确做法：覆盖 Location.prototype.hostname，它在 Chromium 中是可配置的 getter。
+                // Location.prototype 上的 hostname 改变会影响所有 Location 实例（包括 window.location）。
+                const loopbackFixScript = [
                     '<script>',
                     '(function(){',
-                    "  var DIALOG_OBSERVER = new MutationObserver(function() {",
-                    "    var dialogs = document.querySelectorAll('[role=\"dialog\"], [class*=\"dialog\"], [class*=\"modal\"], [class*=\"overlay\"]');",
-                    "    for (var i = 0; i < dialogs.length; i++) {",
-                    "      var d = dialogs[i];",
-                    "      if (d.textContent.indexOf('Internal Testing Notice') >= 0 || d.textContent.indexOf('Internal Testing') >= 0) {",
-                    "        var closeBtn = d.querySelector('button') || d.querySelector('[class*=\"close\"], [class*=\"dismiss\"], [aria-label*=\"close\" i]');",
-                    "        if (closeBtn) { closeBtn.click(); }",
-                    "        else { d.style.display = 'none'; }",
-                    "      }",
-                    "    }",
-                    "  });",
-                    "  DIALOG_OBSERVER.observe(document.body, { childList: true, subtree: true });",
-                    "  setTimeout(function() { DIALOG_OBSERVER.disconnect(); }, 30000);",
+                    '  var LOCATION_WARN = function(msg) {',
+                    '    try { console.warn("[loopback] " + msg); } catch(e) {}',
+                    '  };',
+                    '  // 方法1（首选）：覆盖 Location.prototype.hostname（Chromium 中最可靠）',
+                    '  try {',
+                    '    if (typeof Location !== "undefined") {',
+                    '      var h = Object.getOwnPropertyDescriptor(Location.prototype, "hostname");',
+                    '      if (h && h.configurable) {',
+                    '        Object.defineProperty(Location.prototype, "hostname", {',
+                    '          get: function() { return "127.0.0.1"; },',
+                    '          configurable: true',
+                    '        });',
+                    '        var hostDesc = Object.getOwnPropertyDescriptor(Location.prototype, "host");',
+                    '        if (hostDesc && hostDesc.configurable) {',
+                    '          Object.defineProperty(Location.prototype, "host", {',
+                    '            get: function() { return "127.0.0.1:" + this.port; },',
+                    '            configurable: true',
+                    '          });',
+                    '        }',
+                    '        LOCATION_WARN("Location.prototype.hostname patched");',
+                    '      } else { LOCATION_WARN("hostname not configurable"); }',
+                    '    } else { LOCATION_WARN("Location not available"); }',
+                    '  } catch(e) { LOCATION_WARN("method1 failed: " + e.message); }',
                     '})();',
-                    // 强制设置中文语言偏好：通过 DSH API 设置 locale 命名空间
+                    '</script>'
+                ].join('\n');
+
+                // crypto.randomUUID polyfill（部分 WebView 不支持）
+                const cryptoPolyfillScript = [
+                    '<script>',
                     '(function(){',
-                    "  setTimeout(function(){",
-                    "    fetch('/api/settings.update', {",
-                    "      method: 'POST',",
-                    "      headers: { 'Content-Type': 'application/json' },",
-                    "      body: JSON.stringify({ ns: 'locale', patch: { preference: 'zh' } })",
-                    "    }).catch(function(){});",
-                    "    fetch('/api/settings.replace', {",
-                    "      method: 'POST',",
-                    "      headers: { 'Content-Type': 'application/json' },",
-                    "      body: JSON.stringify({ ns: 'locale', section: { preference: 'zh' } })",
-                    "    }).catch(function(){});",
-                    "  }, 3000);",
+                    "  try {",
+                    "    if (typeof crypto !== 'undefined' && !crypto.randomUUID) {",
+                    "      crypto.randomUUID = function() {",
+                    "        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {",
+                    "          var r = Math.random() * 16 | 0;",
+                    "          return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);",
+                    "        });",
+                    "      };",
+                    "    }",
+                    "  } catch(e) {}",
                     '})();',
                     '</script>'
                 ].join('\n');
@@ -404,7 +552,7 @@ const server = http.createServer((req, res) => {
                 ].join('\n');
 
                 const baseTag = '<base href="' + baseHref + '">\n';
-                body = body.replace('<head>', '<head>' + mobileCss + baseTag + mobileToggleScript + ingressFixScript);
+                body = body.replace('<head>', '<head>' + mobileCss + baseTag + loopbackFixScript + cryptoPolyfillScript + mobileToggleScript + ingressFixScript);
 
                 const headers = cleanHeaders(proxyRes.headers);
                 headers['content-length'] = Buffer.byteLength(body, 'utf-8');
