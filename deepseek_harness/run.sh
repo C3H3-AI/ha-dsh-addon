@@ -560,6 +560,39 @@ const server = http.createServer((req, res) => {
                 res.end(body);
                 log('[HTTP-' + reqId + ']', 'HTML rewritten with base:', baseHref);
             });
+        } else if (targetPath === '/api/host.describe' && contentType.includes('json')) {
+            // 拦截 host.describe API，将 hostname 改为 127.0.0.1
+            // DSH 后端通过 host.describe 返回的 hostname 判断 isLoopback，
+            // HA Ingress 环境下 hostname 是外部域名，导致 isLoopback = false，
+            // 所有设置使用 persistence = "memory"，刷新丢失。
+            // 这里将 hostname 改为 127.0.0.1，使 DSH 使用 persistence = "host"。
+            let body = '';
+            proxyRes.on('data', (chunk) => { body += chunk.toString(); });
+            proxyRes.on('end', () => {
+                try {
+                    const data = JSON.parse(body);
+                    // 递归修改所有 hostname 字段
+                    (function patchHostname(obj) {
+                        if (obj && typeof obj === 'object') {
+                            for (const key of Object.keys(obj)) {
+                                if (key === 'hostname' && typeof obj[key] === 'string') {
+                                    obj[key] = '127.0.0.1';
+                                } else {
+                                    patchHostname(obj[key]);
+                                }
+                            }
+                        }
+                    })(data);
+                    body = JSON.stringify(data);
+                    log('[HTTP-' + reqId + ']', 'host.describe patched: hostname -> 127.0.0.1');
+                } catch(e) {
+                    log('[HTTP-' + reqId + ']', 'host.describe patch error:', e.message);
+                }
+                const headers = cleanHeaders(proxyRes.headers);
+                headers['content-length'] = Buffer.byteLength(body, 'utf-8');
+                res.writeHead(proxyRes.statusCode, headers);
+                res.end(body);
+            });
         } else {
             res.writeHead(proxyRes.statusCode, cleanHeaders(proxyRes.headers));
             proxyRes.pipe(res);
