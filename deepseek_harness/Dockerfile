@@ -1,4 +1,4 @@
-ARG BUILD_VERSION="0.2.11"
+ARG BUILD_VERSION="0.2.12"
 ARG BUILD_ARCH="aarch64"
 
 # ============================================================

@@ -246,6 +246,10 @@ const server = http.createServer((req, res) => {
 
         log('[HTTP-' + reqId + ']', 'response:', proxyRes.statusCode, 'type:', contentType);
 
+        // 提取路径部分（去除查询参数），用于 URL 匹配
+        // 浏览器加载 ES Module 时可能带 ?rev=xxx 或 ?t=timestamp 等缓存清除参数
+        const pathOnly = targetPath.split('?')[0];
+
         // ===== 关键修复：改写 dsh-client-connection 模块，强制 isLoopback = true =====
         // DSH 前端通过 connection.isLoopback 决定设置持久化后端（host 持久化 或 memory 仅内存）：
         //   - isLoopback=true  -> SettingsScopeController(api, spec, "host")  -> 设置通过 RPC 存到后端 settings.yaml
@@ -254,7 +258,7 @@ const server = http.createServer((req, res) => {
         // 在 HA Ingress 下 hostname 是外部域名（如 api.homediy.top），永远判定为非 loopback。
         // 注入脚本覆盖 Location.prototype.hostname 因浏览器不可配置(Non-configurable)而失效。
         // 因此这里在代理层直接改写该插件模块源码：把 isLoopback 计算替换为常量 true。
-        if (targetPath.endsWith('/plugins/@deepseek-ai/dsh-client-connection/client.js') &&
+        if (pathOnly.endsWith('/plugins/@deepseek-ai/dsh-client-connection/client.js') &&
             (contentType.includes('javascript') || contentType.includes('application/json') || isHtml)) {
             let body = '';
             proxyRes.on('data', (chunk) => { body += chunk.toString(); });
@@ -412,8 +416,35 @@ const server = http.createServer((req, res) => {
                     '</script>'
                 ].join('\n');
 
+                // ===== localStorage 诊断脚本 =====
+                // 检查 localStorage 状态，记录对话数据和会话数据的持久化情况
+                // 用户可在浏览器控制台查看日志以诊断问题
+                const storageDiagScript = [
+                    '<script>',
+                    '(function(){',
+                    '  var LS_WARN = function(msg) {',
+                    '    try { console.warn("[storage] " + msg); } catch(e) {}',
+                    '  };',
+                    '  try {',
+                    '    var avail = typeof localStorage !== "undefined";',
+                    '    LS_WARN("localStorage available: " + avail);',
+                    '    if (avail) {',
+                    '      var keys = Object.keys(localStorage);',
+                    '      LS_WARN("localStorage keys: " + JSON.stringify(keys));',
+                    '      var chatKey = keys.find(function(k) { return k.indexOf("dsh.conversation.chat") !== -1; });',
+                    '      var sessKey = keys.find(function(k) { return k.indexOf("dsh.sessions.current") !== -1; });',
+                    '      if (chatKey) { LS_WARN("chat data found: " + chatKey + " length=" + localStorage.getItem(chatKey).length); }',
+                    '      else { LS_WARN("WARNING: No chat data in localStorage!"); }',
+                    '      if (sessKey) { LS_WARN("session data found: " + sessKey + " value=" + localStorage.getItem(sessKey)); }',
+                    '      else { LS_WARN("WARNING: No session data in localStorage!"); }',
+                    '    }',
+                    '  } catch(e) { LS_WARN("ERROR: " + e.message); }',
+                    '})();',
+                    '</script>'
+                ].join('\n');
+
                 const baseTag = '<base href="' + baseHref + '">\n';
-                body = body.replace('<head>', '<head>' + baseTag + mobileCss + loopbackFixScript + cryptoPolyfillScript + ingressFixScript);
+                body = body.replace('<head>', '<head>' + baseTag + mobileCss + loopbackFixScript + cryptoPolyfillScript + ingressFixScript + storageDiagScript);
 
                 const headers = cleanHeaders(proxyRes.headers);
                 headers['content-length'] = Buffer.byteLength(body, 'utf-8');
@@ -421,7 +452,7 @@ const server = http.createServer((req, res) => {
                 res.end(body);
                 log('[HTTP-' + reqId + ']', 'HTML rewritten with base:', baseHref);
             });
-        } else if (targetPath === '/api/host.describe' && contentType.includes('json')) {
+        } else if (pathOnly === '/api/host.describe' && contentType.includes('json')) {
             // 拦截 host.describe API，将 hostname 改为 127.0.0.1
             // DSH 后端通过 host.describe 返回的 hostname 判断 isLoopback，
             // HA Ingress 环境下 hostname 是外部域名，导致 isLoopback = false，

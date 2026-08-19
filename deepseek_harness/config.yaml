@@ -1,5 +1,5 @@
 name: "DeepSeek Harness"
-version: "0.2.11"
+version: "0.2.12"
 slug: "deepseek_harness"
 description: "DeepSeek Harness - 开源 AI Agent 运行框架，一切皆插件"
 url: "https://github.com/deepseek-ai/deepseek-harness"
