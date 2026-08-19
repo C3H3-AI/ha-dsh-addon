@@ -60,7 +60,13 @@ echo "[DSH Addon]   Bridge API port: ${API_PORT}"
 
 # 导出环境变量供 DSH 使用
 export DEEPSEEK_API_KEY="${API_KEY}"
-export DSH_HOME="/root/.dsh"
+# 重要：DSH_HOME 必须指向持久化目录！
+# HA Supervisor 为每个 addon 提供持久化的 /data 目录（容器重建后不丢失），
+# 而 /root/.dsh 是容器内普通目录，addon 重建/重启后会被清空。
+# 会话日志（$DSH_HOME/sessions/*.jsonl.zstd）、设置（settings.yaml）、
+# 凭据（.credentials.yaml）等全部数据都存储在 $DSH_HOME 下，
+# 若指向非持久化目录则对话记录和设置会在重启后全部丢失。
+export DSH_HOME="/data/dsh"
 export DSH_API_PORT="${API_PORT}"
 DSH_BIN="/usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js"
 export DSH_BIN

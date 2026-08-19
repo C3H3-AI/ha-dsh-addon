@@ -1,4 +1,4 @@
-ARG BUILD_VERSION="0.2.12"
+ARG BUILD_VERSION="0.2.13"
 ARG BUILD_ARCH="aarch64"
 
 # ============================================================
@@ -34,7 +34,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 \
         build-essential \
     && rm -rf /var/lib/apt/lists/* \
-    && mkdir -p /root/.dsh
+    && mkdir -p /data/dsh
 
 # 使用国内 npm 镜像安装 @deepseek-ai/dsh
 RUN npm config set registry https://registry.npmmirror.com \
