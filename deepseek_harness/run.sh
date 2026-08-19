@@ -246,7 +246,38 @@ const server = http.createServer((req, res) => {
 
         log('[HTTP-' + reqId + ']', 'response:', proxyRes.statusCode, 'type:', contentType);
 
-        if (isHtml && ingressPath) {
+        // ===== 关键修复：改写 dsh-client-connection 模块，强制 isLoopback = true =====
+        // DSH 前端通过 connection.isLoopback 决定设置持久化后端（host 持久化 或 memory 仅内存）：
+        //   - isLoopback=true  -> SettingsScopeController(api, spec, "host")  -> 设置通过 RPC 存到后端 settings.yaml
+        //   - isLoopback=false -> 使用 "memory"，所有设置、弹窗状态、语言选择一律不保存（刷新即丢）
+        // isLoopback 由前端 pageLocation.hostname 判断（client.js: isLoopbackHostname(...)）。
+        // 在 HA Ingress 下 hostname 是外部域名（如 api.homediy.top），永远判定为非 loopback。
+        // 注入脚本覆盖 Location.prototype.hostname 因浏览器不可配置(Non-configurable)而失效。
+        // 因此这里在代理层直接改写该插件模块源码：把 isLoopback 计算替换为常量 true。
+        if (targetPath.endsWith('/plugins/@deepseek-ai/dsh-client-connection/client.js') &&
+            (contentType.includes('javascript') || contentType.includes('application/json') || isHtml)) {
+            let body = '';
+            proxyRes.on('data', (chunk) => { body += chunk.toString(); });
+            proxyRes.on('end', () => {
+                if (body.indexOf('isLoopback') !== -1) {
+                    // 未压缩 ESM 精确替换：isLoopback: (...isLoopbackHostname...) -> isLoopback: true
+                    body = body.replace(
+                        /isLoopback:\s*pageLocation\s*===\s*void\s*0\s*\|\|\s*isLoopbackHostname\(\s*pageLocation\.hostname\s*\)\s*?[,;}]/g,
+                        'isLoopback: true,'
+                    );
+                    // 若未命中精确模式，做兜底：将其它任何非 true 的 isLoopback: 赋值强制为 true
+                    if (body.indexOf('isLoopback: true') === -1) {
+                        body = body.replace(/isLoopback:\s*(?!true)[^,]+,/g, 'isLoopback: true,');
+                    }
+                    log('[HTTP-' + reqId + ']', 'dsh-client-connection isLoopback forced to true');
+                }
+                const headers = cleanHeaders(proxyRes.headers);
+                headers['content-length'] = Buffer.byteLength(body, 'utf-8');
+                headers['content-type'] = 'application/javascript; charset=utf-8';
+                res.writeHead(proxyRes.statusCode, headers);
+                res.end(body);
+            });
+        } else if (isHtml && ingressPath) {
             let body = '';
             proxyRes.on('data', (chunk) => { body += chunk.toString(); });
             proxyRes.on('end', () => {
