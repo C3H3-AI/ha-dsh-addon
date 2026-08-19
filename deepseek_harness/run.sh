@@ -101,12 +101,13 @@ EOCONFIG
 fi
 
 # ===== A 底座：可选接入 HA 原生 MCP Server（让 DSH 控设备）=====
-# DSH 的 MCP 客户端配置通过 cordis 的 patch overlay 注入（--patch 参数），
-# 不改动 DSH 自带 cordis.yml，避免破坏默认插件栈。
-MCP_PATCH=""
+# DSH 0.1.0-rc.7 不支持 --patch 命令行参数，改为写入 Home 级 patch 文件
+# 根据 DSH 装配规则，Home 级 patch ($DSH_HOME/cordis.patch.yml) 会自动加载在最后一层
+# 这样我们可以在不修改原始 profile 的前提下注入 MCP 插件配置
 if [ "${HA_MCP_ENABLED}" = "true" ] && [ -n "${HA_MCP_URL}" ]; then
-    echo "[DSH Addon] HA MCP enabled -> writing cordis patch..."
-    cat > /config/dsh-mcp-patch.yml << EOMCP
+    echo "[DSH Addon] HA MCP enabled -> writing Home-level cordis patch..."
+    cat > "${DSH_HOME}/cordis.patch.yml" << EOMCP
+# 注入 HA MCP 客户端插件（Home 级 patch，自动加载）
 plugins:
   mcp-client-ha:
     transport: streamable-http
@@ -117,8 +118,7 @@ plugins:
     toolCallTimeoutMs: 120000
     failOnStartupError: false
 EOMCP
-    MCP_PATCH="--patch /config/dsh-mcp-patch.yml"
-    echo "[DSH Addon]   MCP patch: ${MCP_PATCH}"
+    echo "[DSH Addon]   MCP patch: ${DSH_HOME}/cordis.patch.yml"
 else
     echo "[DSH Addon] HA MCP disabled (set ha_mcp_enabled=true + ha_mcp_url to enable)"
 fi
@@ -136,8 +136,8 @@ cd "${DSH_WORKSPACE}" || true
 
 # 注意：dsh 的 HMR 插件需要 --expose-internals 标志，必须通过 node 命令行参数传递
 # 直接使用 dsh 包的入口文件（避免 .bin 目录 symlink 问题）
-# 若启用 HA MCP，则通过 --patch 注入 mcp-client 插件
-node --expose-internals "${DSH_BIN}" --profile web --host 127.0.0.1 --port 3081 ${MCP_PATCH} &
+# 若启用 HA MCP，则通过 Home 级 cordis.patch.yml 注入 mcp-client 插件
+node --expose-internals "${DSH_BIN}" --profile web --host 127.0.0.1 --port 3081 &
 DSH_PID=$!
 
 # 等待 DSH Web UI 就绪
