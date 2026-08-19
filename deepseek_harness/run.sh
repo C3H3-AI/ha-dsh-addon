@@ -291,209 +291,36 @@ const server = http.createServer((req, res) => {
                 // 注入 Ingress 路径修复脚本：patch fetch 和 WebSocket 以使用正确的 Ingress 路径
                 // 关键：DSH 客户端代码使用 new URL(path, location.origin) 构造 URL 对象，
                 // 然后直接传给 fetch(new URL(...))，所以 url 参数是 URL 对象，不是字符串！
-                // 注入移动端响应式样式 + 脚本
-                // 核心思路：三栏布局变为上下滚动布局，弹窗/对话框覆盖全屏
+                // 注入移动端响应式样式
+                // 注意：不再改动三栏布局（sidebarCol/centerCol/detailsCol），
+                // 只修复对话框在手机上可能被遮挡或不可见的问题。
+                // DSH 自身的三栏布局在小屏上会自然压缩，无需干预。
                 const mobileCss = [
                     '<style>',
                     '@media (max-width: 768px) {',
-                    // 侧边栏：从左侧滑入的浮动面板
-                    '  div[class*="sidebarCol"] {',
-                    '    position: fixed !important;',
-                    '    left: 0 !important;',
-                    '    top: 0 !important;',
-                    '    z-index: 1000 !important;',
-                    '    height: 100% !important;',
-                    '    width: 280px !important;',
-                    '    transform: translateX(-100%) !important;',
-                    '    transition: transform 0.25s ease !important;',
-                    '    box-shadow: 2px 0 12px rgba(0,0,0,0.3) !important;',
-                    '  }',
-                    '  div[class*="sidebarCol"][data-mobile-open="true"] {',
-                    '    transform: translateX(0) !important;',
-                    '  }',
-                    // 侧边栏打开时的遮罩层
-                    '  #dsh-mobile-mask {',
-                    '    position: fixed !important;',
-                    '    inset: 0 !important;',
-                    '    z-index: 999 !important;',
-                    '    background: rgba(0,0,0,0.4) !important;',
-                    '    display: none !important;',
-                    '  }',
-                    '  #dsh-mobile-mask[data-visible="true"] {',
-                    '    display: block !important;',
-                    '  }',
-                    // 主内容区：全宽
-                    '  div[class*="centerCol"] {',
-                    '    margin-left: 0 !important;',
-                    '    width: 100% !important;',
-                    '    min-width: 0 !important;',
-                    '  }',
-                    // 右侧详情面板：全屏浮动弹窗
-                    '  div[class*="detailsCol"] {',
-                    '    position: fixed !important;',
-                    '    left: 0 !important;',
-                    '    top: 0 !important;',
-                    '    z-index: 1100 !important;',
-                    '    width: 100% !important;',
-                    '    height: 100% !important;',
-                    '    max-width: 100% !important;',
-                    '    transform: translateX(100%) !important;',
-                    '    transition: transform 0.25s ease !important;',
-                    '    box-shadow: -2px 0 12px rgba(0,0,0,0.3) !important;',
-                    '    overflow-y: auto !important;',
-                    '    -webkit-overflow-scrolling: touch !important;',
-                    '  }',
-                    '  div[class*="detailsCol"][data-mobile-open="true"] {',
-                    '    transform: translateX(0) !important;',
-                    '  }',
-                    // 详情面板关闭按钮
-                    '  #dsh-details-close {',
-                    '    position: fixed !important;',
-                    '    top: 8px !important;',
-                    '    right: 8px !important;',
-                    '    z-index: 1101 !important;',
-                    '    width: 36px !important;',
-                    '    height: 36px !important;',
-                    '    border: none !important;',
-                    '    border-radius: 8px !important;',
-                    '    background: var(--bg-surface, #2b2d31) !important;',
-                    '    color: var(--fg-default, #fff) !important;',
-                    '    font-size: 20px !important;',
-                    '    cursor: pointer !important;',
-                    '    display: none !important;',
-                    '    align-items: center !important;',
-                    '    justify-content: center !important;',
-                    '    box-shadow: 0 2px 8px rgba(0,0,0,0.3) !important;',
-                    '  }',
-                    '  #dsh-details-close[data-visible="true"] {',
-                    '    display: flex !important;',
-                    '  }',
-                    // 汉堡菜单按钮
-                    '  #dsh-mobile-toggle {',
-                    '    position: fixed !important;',
-                    '    left: 8px !important;',
-                    '    top: 8px !important;',
-                    '    z-index: 1001 !important;',
-                    '    width: 36px !important;',
-                    '    height: 36px !important;',
-                    '    border: none !important;',
-                    '    border-radius: 8px !important;',
-                    '    background: var(--bg-surface, #2b2d31) !important;',
-                    '    color: var(--fg-default, #fff) !important;',
-                    '    font-size: 18px !important;',
-                    '    cursor: pointer !important;',
-                    '    display: flex !important;',
-                    '    align-items: center !important;',
-                    '    justify-content: center !important;',
-                    '    box-shadow: 0 2px 8px rgba(0,0,0,0.3) !important;',
-                    '  }',
-                    // 通用弹窗/对话框：全屏覆盖
+                    // 对话框：确保全屏可见，但不强制覆盖整个屏幕
                     '  div[class*="dialog"], div[role="dialog"], div[class*="modal"] {',
-                    '    position: fixed !important;',
-                    '    left: 0 !important;',
-                    '    top: 0 !important;',
-                    '    z-index: 1200 !important;',
-                    '    width: 100% !important;',
-                    '    height: 100% !important;',
-                    '    max-width: 100% !important;',
-                    '    max-height: 100% !important;',
-                    '    margin: 0 !important;',
-                    '    border-radius: 0 !important;',
-                    '    overflow-y: auto !important;',
-                    '    -webkit-overflow-scrolling: touch !important;',
+                    '    max-width: 100vw !important;',
+                    '    max-height: 100vh !important;',
+                    '    box-sizing: border-box !important;',
                     '  }',
+                    // 对话框内部内容区域：自适应宽度
                     '  div[class*="dialog"] > :first-child,',
-                    '  div[role="dialog"] > :first-child {',
+                    '  div[role="dialog"] > :first-child,',
+                    '  div[class*="modal"] > :first-child {',
                     '    max-width: 100% !important;',
-                    '    width: 100% !important;',
-                    '    margin: 0 !important;',
-                    '    border-radius: 0 !important;',
-                    '    height: 100% !important;',
+                    '    box-sizing: border-box !important;',
                     '  }',
                     // 底部安全区域
                     '  body {',
                     '    padding-bottom: env(safe-area-inset-bottom, 0px) !important;',
                     '  }',
+                    // 确保所有交互元素不被遮挡
+                    '  input, select, textarea, button {',
+                    '    font-size: 16px !important;',
+                    '  }',
                     '}',
                     '</style>'
-                ].join('\n');
-
-                // 移动端交互脚本
-                // 使用 MutationObserver 等待 SPA 渲染完成后操作 DOM
-                // 功能：侧边栏滑动切换、详情面板全屏展示、弹窗适配
-                const mobileToggleScript = [
-                    '<script>',
-                    '(function(){',
-                    '  if (window.innerWidth > 768) return;',
-                    '  var M_OBSERVER = new MutationObserver(function() {',
-                    "    var frame = document.querySelector('[class*=\"frame\"]');",
-                    "    var sidebar = document.querySelector('[class*=\"sidebarCol\"]');",
-                    "    var details = document.querySelector('[class*=\"detailsCol\"]');",
-                    "    var center = document.querySelector('[class*=\"centerCol\"]');",
-                    '    if (!frame || !sidebar) return;',
-                    '    M_OBSERVER.disconnect();',
-                    // 设置网格布局：侧边栏宽度固定为 0，由 CSS 控制
-                    '    var origGrid = frame.style.gridTemplateColumns || "";',
-                    '    var parts = origGrid.split(/\\s+/);',
-                    '    if (parts.length >= 3) {',
-                    '      parts[0] = "0px";',
-                    '      parts[2] = "0px";',
-                    '      frame.style.gridTemplateColumns = parts.join(" ");',
-                    '    }',
-                    // 侧边栏由 CSS 控制，只需设置 data 属性
-                    // 创建遮罩层
-                    "    var mask = document.createElement('div');",
-                    '    mask.id = "dsh-mobile-mask";',
-                    '    mask.onclick = function() {',
-                    '      sidebar.dataset.mobileOpen = "false";',
-                    '      mask.dataset.visible = "false";',
-                    '    };',
-                    '    document.body.appendChild(mask);',
-                    // 汉堡菜单按钮
-                    "    var btn = document.createElement('button');",
-                    '    btn.id = "dsh-mobile-toggle";',
-                    '    btn.textContent = "☰";',
-                    '    btn.onclick = function() {',
-                    '      var isOpen = sidebar.dataset.mobileOpen === "true";',
-                    '      sidebar.dataset.mobileOpen = isOpen ? "false" : "true";',
-                    '      mask.dataset.visible = isOpen ? "false" : "true";',
-                    '    };',
-                    '    document.body.appendChild(btn);',
-                    // 详情面板全屏适配
-                    '    if (details) {',
-                    '      details.dataset.mobileOpen = "false";',
-                    // 监听详情面板的 style.display 变化（DSH 控制显示/隐藏）
-                    "      var detailsObserver = new MutationObserver(function() {",
-                    '        var d = details.style.display;',
-                    '        if (d && d !== "none") {',
-                    '          details.dataset.mobileOpen = "true";',
-                    '          closeBtn.dataset.visible = "true";',
-                    '          center.style.display = "none";',
-                    '        } else {',
-                    '          details.dataset.mobileOpen = "false";',
-                    '          closeBtn.dataset.visible = "false";',
-                    '          center.style.display = "";',
-                    '        }',
-                    '      });',
-                    "      detailsObserver.observe(details, { attributes: true, attributeFilter: ['style'] });",
-                    // 详情面板关闭按钮
-                    "      var closeBtn = document.createElement('button');",
-                    '      closeBtn.id = "dsh-details-close";',
-                    '      closeBtn.textContent = "✕";',
-                    '      closeBtn.dataset.visible = "false";',
-                    '      closeBtn.onclick = function() {',
-                    '        details.style.display = "none";',
-                    '        details.dataset.mobileOpen = "false";',
-                    '        closeBtn.dataset.visible = "false";',
-                    '        center.style.display = "";',
-                    '      };',
-                    '      document.body.appendChild(closeBtn);',
-                    '    }',
-                    '  });',
-                    '  M_OBSERVER.observe(document.body, { childList: true, subtree: true });',
-                    "  setTimeout(function() { M_OBSERVER.disconnect(); }, 15000);",
-                    '})();',
-                    '</script>'
                 ].join('\n');
 
                 // ===== 核心修复：让 DSH 客户端认为运行在 loopback 环境 =====
@@ -586,7 +413,7 @@ const server = http.createServer((req, res) => {
                 ].join('\n');
 
                 const baseTag = '<base href="' + baseHref + '">\n';
-                body = body.replace('<head>', '<head>' + mobileCss + baseTag + loopbackFixScript + cryptoPolyfillScript + mobileToggleScript + ingressFixScript);
+                body = body.replace('<head>', '<head>' + baseTag + mobileCss + loopbackFixScript + cryptoPolyfillScript + ingressFixScript);
 
                 const headers = cleanHeaders(proxyRes.headers);
                 headers['content-length'] = Buffer.byteLength(body, 'utf-8');
