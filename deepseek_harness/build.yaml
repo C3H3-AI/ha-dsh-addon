@@ -1,3 +1,0 @@
-build_from:
-  aarch64: "docker.io/node:22-bookworm-slim"
-  amd64: "docker.io/node:22-bookworm-slim"
