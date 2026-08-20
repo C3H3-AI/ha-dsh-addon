@@ -48,19 +48,28 @@ const server = http.createServer((req, res) => {
         return;
     }
 
+    // 重要：先去除 Ingress 前缀，后续所有路径判断都基于剥离后的 targetPath
+    let targetPath = req.url;
+    if (ingressPath && targetPath.startsWith(ingressPath)) {
+        targetPath = targetPath.slice(ingressPath.length);
+        if (targetPath === '') {
+            targetPath = '/';
+        }
+    }
+
     // 一键更新端点：/__dsh_update* -> bridge API :3082（代理注入 token，浏览器无需持有）
     // 仅允许 GET/POST；POST 由 bridge 内部做 fail-closed 鉴权
     // 安全：此通道会主动注入 BRIDGE_TOKEN，等效于把 bridge 的 token 鉴权架空，
     // 因此必须限定来源为 HA ingress（带 x-ingress-path 头），
     // 防止容器网络内其它 addon/进程直连 3080 免 token 触发 npm install/容器重启。
-    if (req.url.indexOf('/__dsh_update') === 0) {
+    if (targetPath.indexOf('/__dsh_update') === 0) {
         if (!ingressPath) {
             log('[HTTP-' + reqId + ']', 'update denied: no x-ingress-path (non-ingress source)');
             res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({ ok: false, error: 'forbidden: update endpoint is ingress-only' }));
             return;
         }
-        const bridgePath = '/api' + req.url.slice('/__dsh_update'.length);
+        const bridgePath = '/api' + targetPath.slice('/__dsh_update'.length);
         const headers = Object.assign({}, req.headers);
         delete headers['host'];
         delete headers['origin'];
@@ -78,20 +87,12 @@ const server = http.createServer((req, res) => {
             bres.pipe(res);
         });
         b.on('error', (e) => {
+            if (res.headersSent) return;
             res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({ ok: false, error: 'bridge relay failed: ' + e.message }));
         });
         req.pipe(b);
         return;
-    }
-
-    // 重要：去除 Ingress 前缀，否则 API 路径包含前缀会导致 DSH 返回 404
-    let targetPath = req.url;
-    if (ingressPath && targetPath.startsWith(ingressPath)) {
-        targetPath = targetPath.slice(ingressPath.length);
-        if (targetPath === '') {
-            targetPath = '/';
-        }
     }
 
     log('[HTTP-' + reqId + ']', req.method, 'original:', req.url, '-> target:', targetPath);
@@ -346,56 +347,103 @@ const server = http.createServer((req, res) => {
                 ].join('\n');
 
                 // ===== 一键更新按钮（DESIGN.md §8）=====
-                // 浮动按钮调用 /__dsh_update*，由 HTTP 代理中转注入 token 到 bridge API。
+                // 浮动按钮始终显示（显示当前版本），调用 /__dsh_update* 由 HTTP 代理中转。
+                // 同时通过 MutationObserver 注入到 DSH 设置页面中的按钮区域。
                 // 流程：检查更新(GET status) -> 一键更新(POST) -> 轮询 result -> 容器重启。
                 const updateUiScript = [
                     '<style>',
                     '#dsh-update-btn { position:fixed; right:16px; bottom:16px; z-index:99999; ',
                     '  background:#185fa5; color:#fff; border:none; border-radius:20px; padding:8px 16px;',
-                    '  font-size:13px; cursor:pointer; box-shadow:0 2px 8px rgba(0,0,0,.25); display:none; }',
+                    '  font-size:13px; cursor:pointer; box-shadow:0 2px 8px rgba(0,0,0,.25); display:flex; align-items:center; gap:4px; }',
                     '#dsh-update-btn:hover { background:#0c447c; }',
+                    '#dsh-update-btn.loading { opacity:0.6; pointer-events:none; }',
+                    '#dsh-update-btn .dot { width:6px; height:6px; border-radius:50%; display:inline-block; margin-left:4px; }',
+                    '#dsh-update-btn .dot.green { background:#4caf50; }',
+                    '#dsh-update-btn .dot.orange { background:#ff9800; }',
+                    '#dsh-update-btn .dot.gray { background:#9e9e9e; }',
                     '#dsh-update-status { position:fixed; right:16px; bottom:52px; z-index:99999; ',
                     '  background:rgba(20,20,20,.85); color:#fff; padding:8px 12px; border-radius:8px;',
                     '  font-size:12px; max-width:320px; display:none; white-space:pre-line; }',
+                    // 设置页面更新按钮样式
+                    '#dsh-settings-update { margin:12px 0; display:none; }',
+                    '#dsh-settings-update button { ',
+                    '  background:#185fa5; color:#fff; border:none; border-radius:6px; padding:8px 16px;',
+                    '  font-size:13px; cursor:pointer; display:inline-flex; align-items:center; gap:6px; }',
+                    '#dsh-settings-update button:hover { background:#0c447c; }',
                     '</style>',
-                    '<button id="dsh-update-btn">DSH 更新</button>',
+                    '<button id="dsh-update-btn">DSH <span id="dsh-ver">?</span><span class="dot gray" id="dsh-dot"></span></button>',
                     '<div id="dsh-update-status"></div>',
+                    '<div id="dsh-settings-update"><button id="dsh-settings-update-btn">🔄 检查 DSH 更新</button></div>',
                     '<script>',
                     '(function(){',
-                    '  var btn = document.getElementById("dsh-update-btn");',
-                    '  var box = document.getElementById("dsh-update-status");',
                     '  var BASE = "' + ingressPath + '";',
+                    '  var btn = document.getElementById("dsh-update-btn");',
+                    '  var verEl = document.getElementById("dsh-ver");',
+                    '  var dotEl = document.getElementById("dsh-dot");',
+                    '  var box = document.getElementById("dsh-update-status");',
+                    '  var settingsBtn = document.getElementById("dsh-settings-update");',
+                    '  var settingsBtnInner = document.getElementById("dsh-settings-update-btn");',
                     '  function api(path, opts) {',
                     '    var url = BASE + path;',
                     '    return fetch(url, Object.assign({ headers: { "Content-Type": "application/json" } }, opts || {}));',
                     '  }',
                     '  function show(msg, isErr) { box.style.display = "block"; box.textContent = msg; box.style.border = isErr ? "1px solid #e24b4a" : "1px solid #1d9e75"; }',
-                    '  btn.addEventListener("click", function() {',
+                    '  function hideBox() { box.style.display = "none"; }',
+                    '  function doUpdate() {',
                     '    if (btn.dataset.busy === "1") return;',
-                    '    btn.dataset.busy = "1";',
-                    '    api("/__dsh_update/status").then(function(r){ return r.json(); }).then(function(s){',
-                    '      if (!s.ok) { show("更新服务不可用: " + (s.error || "unknown")); btn.dataset.busy = "0"; return; }',
+                    '    btn.dataset.busy = "1"; btn.classList.add("loading");',
+                    '    api("/__dsh_update/update/status").then(function(r){ return r.json(); }).then(function(s){',
+                    '      if (!s.ok) { show("更新服务不可用: " + (s.error || "unknown"), true); btn.dataset.busy = "0"; btn.classList.remove("loading"); return; }',
                     '      var cur = s.current + (s.usingVendor ? " (vendor)" : " (builtin)");',
-                    '      var latest = s.latest || "?";',
-                    '      var next = s.next || "?";',
-                    '      if (next && next !== cur) {',
-                    '        if (confirm("当前: " + cur + "\\n上游 next: " + next + "\\n\\n一键更新到 " + next + "？更新完成后容器将自动重启。")) {',
+                    '      var next = s.next || "";',
+                    '      if (next && next !== s.current) {',
+                    '        if (confirm("当前: " + cur + "\\n上游最新: " + next + "\\n\\n一键更新到 " + next + "？更新完成后容器将自动重启。")) {',
                     '          show("正在更新到 " + next + " ...");',
-                    '          api("/__dsh_update", { method: "POST", body: JSON.stringify({ channel: "next" }) }).then(function(r){ return r.json(); }).then(function(u){',
+                    '          api("/__dsh_update/update", { method: "POST", body: JSON.stringify({ channel: "next" }) }).then(function(r){ return r.json(); }).then(function(u){',
                     '            if (u.ok) { show("更新中... 完成后容器将自动重启，请稍候刷新页面。"); setTimeout(function(){ location.reload(); }, 8000); }',
-                    '            else { show("更新失败: " + (u.error || "unknown"), true); btn.dataset.busy = "0"; }',
-                    '          }).catch(function(e){ show("更新请求失败: " + e.message, true); btn.dataset.busy = "0"; });',
-                    '        } else { btn.dataset.busy = "0"; }',
+                    '            else { show("更新失败: " + (u.error || "unknown"), true); btn.dataset.busy = "0"; btn.classList.remove("loading"); }',
+                    '          }).catch(function(e){ show("更新请求失败: " + e.message, true); btn.dataset.busy = "0"; btn.classList.remove("loading"); });',
+                    '        } else { btn.dataset.busy = "0"; btn.classList.remove("loading"); }',
                     '      } else {',
-                    '        show("已是最新\\n当前: " + cur + "\\nlatest: " + latest + " / next: " + next);',
-                    '        btn.dataset.busy = "0";',
-                    '        setTimeout(function(){ box.style.display = "none"; }, 4000);',
+                    '        show("当前已是最新版本\\n" + cur);',
+                    '        btn.dataset.busy = "0"; btn.classList.remove("loading");',
+                    '        setTimeout(hideBox, 3000);',
                     '      }',
-                    '    }).catch(function(e){ show("获取更新状态失败: " + e.message, true); btn.dataset.busy = "0"; });',
+                    '    }).catch(function(e){ show("获取更新状态失败: " + e.message, true); btn.dataset.busy = "0"; btn.classList.remove("loading"); });',
+                    '  }',
+                    '  btn.addEventListener("click", doUpdate);',
+                    '  settingsBtnInner.addEventListener("click", doUpdate);',
+                    '  // 加载更新状态',
+                    '  api("/__dsh_update/update/status").then(function(r){ return r.json(); }).then(function(s){',
+                    '    console.log("[DSH Update] status:", s);',
+                    '    verEl.textContent = s.current || "?";',
+                    '    if (s.ok && s.next && s.next !== s.current) {',
+                    '      dotEl.className = "dot orange";',
+                    '      btn.title = "新版本可用: " + s.next;',
+                    '      settingsBtn.style.display = "block";',
+                    '      settingsBtnInner.textContent = "🔄 更新到 " + s.next;',
+                    '    } else {',
+                    '      dotEl.className = "dot green";',
+                    '      btn.title = "已是最新版本";',
+                    '    }',
+                    '  }).catch(function(e){',
+                    '    console.warn("[DSH Update] status fetch failed:", e);',
+                    '    verEl.textContent = "?";',
+                    '    dotEl.className = "dot gray";',
+                    '    btn.title = "更新服务不可用";',
                     '  });',
-                    '  api("/__dsh_update/status").then(function(r){ return r.json(); }).then(function(s){',
-                    '    if (s.ok && s.next && s.next !== s.current) { btn.style.display = "inline-block"; }',
-                    '  }).catch(function(){});',
+                    '  // MutationObserver: 检测设置页面加载，注入更新按钮',
+                    '  var obs = new MutationObserver(function() {',
+                    '    var settingsArea = document.querySelector("[class*=\\"settings\\"], [class*=\\"Settings\\"], [class*=\\"config\\"], [class*=\\"Config\\"]");',
+                    '    if (settingsArea && !settingsArea.querySelector("#dsh-settings-update")) {',
+                    '      var clone = settingsBtn.cloneNode(true);',
+                    '      clone.id = "dsh-settings-update-clone";',
+                    '      clone.style.display = "block";',
+                    '      clone.querySelector("button").addEventListener("click", doUpdate);',
+                    '      settingsArea.insertBefore(clone, settingsArea.firstChild);',
+                    '    }',
+                    '  });',
+                    '  obs.observe(document.body, { childList: true, subtree: true });',
                     '})();',
                     '</script>'
                 ].join('\n');
@@ -456,6 +504,7 @@ const server = http.createServer((req, res) => {
     });
 
     proxyReq.on('error', (err) => {
+        if (res.headersSent) return;
         log('[HTTP-' + reqId + ']', 'ERROR:', err.message);
         res.writeHead(502);
         res.end('Bad Gateway');

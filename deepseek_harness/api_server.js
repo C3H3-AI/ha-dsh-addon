@@ -342,8 +342,11 @@ function handleUpdateResult(req, res) {
 }
 
 const server = http.createServer((req, res) => {
-  // /api/status 是只读健康检查，放行以便排查；写操作必须带 token
+  // 只读端点免鉴权：状态查询、更新状态、更新结果
   if (req.method === 'GET' && req.url === '/api/status') return handleStatus(req, res);
+  if (req.method === 'GET' && req.url === '/api/update/status') return handleUpdateStatus(req, res);
+  if (req.method === 'GET' && req.url === '/api/update/result') return handleUpdateResult(req, res);
+  // 写操作必须带 token（fail-closed）
   if (!tokenMatches(req.headers['authorization'])) {
     sendJson(res, 401, {
       error: '未授权：缺少或错误的 API token（Authorization: Bearer <api_token>）',
@@ -351,8 +354,6 @@ const server = http.createServer((req, res) => {
     });
     return;
   }
-  if (req.method === 'GET' && req.url === '/api/update/status') return handleUpdateStatus(req, res);
-  if (req.method === 'GET' && req.url === '/api/update/result') return handleUpdateResult(req, res);
   if (req.method === 'POST' && req.url === '/api/update') return handleUpdate(req, res);
   if (req.method === 'POST' && req.url === '/api/chat') return handleChat(req, res);
   if (req.method === 'POST' && req.url === '/api/restart') return handleRestart(req, res);
