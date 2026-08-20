@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint & Syntax Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Node.js syntax check (proxy.js, api_server.js)
+        run: |
+          node --check deepseek_harness/proxy.js
+          node --check deepseek_harness/api_server.js
+
+      - name: Python syntax check (custom_component)
+        run: |
+          python3 -m py_compile custom_components/deepseek_harness/__init__.py
+          python3 -m py_compile custom_components/deepseek_harness/config_flow.py
+          python3 -m py_compile custom_components/deepseek_harness/const.py
+          python3 -m py_compile custom_components/deepseek_harness/conversation.py
+          python3 -m py_compile custom_components/deepseek_harness/dsh_client.py
+          python3 -m py_compile custom_components/deepseek_harness/sensor.py
+
+  version-consistency:
+    name: Version Consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check version consistency
+        run: bash scripts/check-versions.sh
+
+  contract-tests:
+    name: Bridge API Contract Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run bridge API contract tests
+        run: node tests/test_bridge_api.js
+
+  build:
+    name: Docker Build Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image (amd64)
+        uses: docker/buildx-action@v3
+        with:
+          context: deepseek_harness
+          platforms: linux/amd64
+          load: true
+          tags: dsh-addon:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=min

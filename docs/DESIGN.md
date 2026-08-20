@@ -42,15 +42,15 @@
 │       ├ GET  /api/status     (只读,放行)                       │
 │       ├ POST /api/chat       (需 Bearer token)                │
 │       ├ POST /api/restart    (需 Bearer token)                │
-│       └ (待加) GET  /api/update/status                        │
-│           (待加) POST /api/update                             │
+│       └ GET  /api/update/status   (需 Bearer token)           │
+│         POST /api/update          (需 Bearer token, 一键更新) │
 │                                                              │
 │   持久化目录 /data/dsh/                                       │
 │     ├ settings.yaml          (模型/提供商配置)                 │
 │     ├ cordis.patch.yml        (MCP 插件注入)                  │
 │     ├ sessions/  jobs?/       (会话/任务数据)                  │
 │     ├ storages/              (工作区/存储元数据)               │
-│     └ (待加) vendor/          (web 升级的新版 DSH)             │
+│     └ vendor/                (web 一键更新的新版 DSH)          │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -59,7 +59,7 @@
 | 组件 | 文件 | 职责 |
 |------|------|------|
 | 启动脚本 | `run.sh` | 读配置、生成 DSH 配置、启动 DSH + 注入生产代理 |
-| HTTP/WS 代理 | 内嵌于 `run.sh` 的 `/tmp/proxy.js` | 处理 Ingress 前缀、重写 HTML/JS、改写 API 响应 |
+| HTTP/WS 代理 | `deepseek_harness/proxy.js`（独立文件，Dockerfile `COPY` 至 `/proxy.js`，run.sh 以 `node /proxy.js` 启动）| 处理 Ingress 前缀、重写 HTML/JS、改写 API 响应 |
 | 桥接 API | `api_server.js` | 面向 HA 自定义集成的稳定契约 |
 
 ---
@@ -126,6 +126,11 @@ HA Ingress 下 hostname 是外部域名（如 `api.homediy.top`），`isLoopback
 - 必须处理**带查询参数**的 URL（如 `?rev=xxx`）：先 `targetPath.split('?')[0]` 再匹配 `endsWith(...)`。
 - 压缩/非压缩均需兜底处理。
 
+### 5.4 注入失败降级日志（防静默失效）
+针对 `isLoopback` 替换与 `host.describe` 改写，代理在执行后会校验是否真正命中目标并**记录 WARNING 日志**（如 `proxy isLoopback injection miss` / `proxy host.describe rewrite miss`）。
+- **动机**：这两项注入依赖 DSH rc 版的内部字符串/结构，上游更新可能改掉它们而让 `replace` 静默不命中 → 设置回退到 `memory` 模式（刷新即丢）。原本这是最大风险点（见评审 §最大风险）。
+- **对策**：注入不再"静默"，命中失败时显式告警，运维可第一时间从 addon 日志发现持久化退化，而不是等用户报"设置丢了"。
+
 ---
 
 ## 6. 关键设计点 4 — Ingress 路径与移动端布局
@@ -154,10 +159,17 @@ HA Ingress 下 hostname 是外部域名（如 `api.homediy.top`），`isLoopback
 - 只改本地文件不提交 → 重启后回到旧代码（版本回退）。
 - **必须**：`git add + git commit + git push` 都把新代码带到远端，让 Supervisor 读取最新源码构建。
 
-### 7.2 版本号三处同步
-1. `config.yaml` 的 `version`
-2. `Dockerfile` 的 `ARG BUILD_VERSION` 与 `io.hass.version` label
-3. （构建时）Supervisor 的 `apps.json` 缓存
+### 7.2 双轨版本号（addon 壳 与 配套集成 独立版本）
+addon 壳与配套集成 `deepseek_harness` 采用**独立版本轨道**（见 §1）：
+
+| 轨道 | 文件 | 约束 |
+|------|------|------|
+| addon 轨 | `config.yaml` 的 `version` + `Dockerfile` 的 `ARG BUILD_VERSION` / `io.hass.version` label | 二者必须相等（当前 `0.2.14`） |
+| 集成轨 | `custom_components/deepseek_harness/const.py` 的 `VERSION` + `manifest.json` 的 `version` | 二者必须相等（当前 `0.2.0`） |
+
+- **两轨不跨轨比较**：addon 0.2.14 ≠ 集成 0.2.0 是**正确且既定**的设计，并非版本漂移。
+- （构建时）Supervisor 的 `apps.json` 缓存仍需随 addon 轨版本同步更新并重启 Supervisor 刷新（详见 §7.3）。
+- 仓库内置 `scripts/check-versions.sh` 在 CI 中校验**双轨各自一致**，避免曾出现的 `const.py`(0.1.0) 与 `manifest.json`(0.2.0) 漂移类问题。
 
 - Supervisor 有 `apps.json` 缓存旧版本号 → 需同步更新该文件并重启 Supervisor 刷新，否则 HA 界面不识别新版本（曾出现显示 0.2.12 实为 0.2.13）。
 
@@ -246,10 +258,34 @@ HA Ingress 下 hostname 是外部域名（如 `api.homediy.top`），`isLoopback
 
 ---
 
-## 10. 测试脚本（开发辅助）
+## 10. 测试与 CI
+
+### 10.1 契约测试（固化进仓库，非 `.scratch/`）
+桥接 API 的契约测试位于 `tests/`，随仓库提交、在 CI 中执行：
+
+| 文件 | 用途 |
+|------|------|
+| `tests/mock_dsh.js` | 模拟 DSH headless 进程（stdout 输出 `{text:...}`），供桥接 API 调用 |
+| `tests/test_bridge_api.js` | 验证 `/api/chat\|status\|restart\|update*` 的鉴权（常量时间比较 + 未配 token 即 401 fail-closed）、单飞并发锁、60s 超时、update 双重闸等行为 |
+
+> 调试期的临时脚本（`test_api*.js` / `test_proxy*.js` / `debug/*`）仍在 `.scratch/`（gitignore），不进入仓库；正式回归走 `tests/`。
+
+### 10.2 CI（GitHub Actions）
+`.github/workflows/ci.yml` 包含四个任务：
+1. **lint**：`node --check` 校验 `proxy.js` / `api_server.js`；`py_compile` 校验集成 `.py`。
+2. **version-consistency**：`scripts/check-versions.sh` 校验双轨版本号一致（见 §7.2）。
+3. **contract-test**：`node tests/test_bridge_api.js`，断言 19 项契约用例通过。
+4. **docker**：`docker build` 验证 addon 镜像可构建。
+
+### 10.3 子进程自愈（run.sh）
+- DSH web 主进程死亡 → run.sh 退出 → Supervisor 重启整个 addon（干净）。
+- 仅 proxy / bridge 子进程死亡、DSH 仍存活 → run.sh 在 `while kill -0 $DSH_PID` 循环内原地 respawn，避免"半残状态"（详见 run.sh 第 200–208 行）。
+
+---
+
+## 11. 调试脚本（开发辅助，未提交）
 
 | 脚本 | 用途 |
 |------|------|
-| `test_api*.js` / `test_proxy*.js` | 本地验证代理/API 契约 |
 | `debug/dsh-client.js`, `debug/plugin-dsh-web.js` | 分析 DSH 客户端/插件装配行为 |
 | `debug/check_dsh.sh` | 检查容器 DSH_HOME、持久化目录、settings.yaml |

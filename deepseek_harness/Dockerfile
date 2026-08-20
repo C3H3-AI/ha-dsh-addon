@@ -44,8 +44,9 @@ RUN npm config set registry https://registry.npmmirror.com \
     && ln -sf /usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js /usr/local/bin/dsh \
     && rm -f /usr/local/lib/node_modules/.package-lock.json 2>/dev/null
 
-# 拷贝启动脚本与桥接 API 服务
+# 拷贝启动脚本、代理、桥接 API 服务
 COPY run.sh /run.sh
+COPY proxy.js /proxy.js
 COPY api_server.js /api_server.js
 RUN chmod a+x /run.sh
 

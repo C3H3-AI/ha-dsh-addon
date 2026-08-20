@@ -45,7 +45,7 @@ class DSHClient:
             headers["Authorization"] = f"Bearer {self._api_token}"
         return headers
 
-    async def _session(self) -> aiohttp.ClientSession:
+    async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None:
             self._session = aiohttp.ClientSession()
         return self._session
@@ -60,7 +60,7 @@ class DSHClient:
         self, message: str, conversation_id: str | None = None
     ) -> str:
         """Send a message to DSH and return the assistant text."""
-        session = await self._session()
+        session = await self._get_session()
         payload: dict[str, Any] = {"message": message}
         if conversation_id:
             payload["session"] = conversation_id
@@ -89,7 +89,7 @@ class DSHClient:
 
     async def status(self) -> dict[str, Any]:
         """Return runtime status dict; always includes ``online``."""
-        session = await self._session()
+        session = await self._get_session()
         try:
             async with async_timeout.timeout(10):
                 async with session.get(
@@ -103,7 +103,7 @@ class DSHClient:
 
     async def restart(self) -> bool:
         """Ask the add-on to restart the DSH runtime."""
-        session = await self._session()
+        session = await self._get_session()
         try:
             async with async_timeout.timeout(30):
                 async with session.post(
