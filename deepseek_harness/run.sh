@@ -80,14 +80,44 @@ export DSH_HOME="/data/dsh"
 export DSH_API_PORT="${API_PORT}"
 
 # ===== DSH 运行路径解析：一键更新(vendor) 优先，否则镜像内置 =====
-# Web 一键更新（DESIGN.md §8）会把新版 DSH 装到 /data/dsh/vendor（持久化），
+# Web 一键更新（DESIGN.md §9）会把新版 DSH 装到 /data/dsh/vendor（持久化），
 # 因此容器每次启动都要优先加载 vendor 里的新版，镜像内置版仅作离线兜底。
-VENDOR_DSH_BIN="/data/dsh/vendor/node_modules/@deepseek-ai/dsh/lib/bin.js"
+VENDOR_DIR="/data/dsh/vendor"
+VENDOR_DSH_BIN="${VENDOR_DIR}/node_modules/@deepseek-ai/dsh/lib/bin.js"
 if [ -f "${VENDOR_DSH_BIN}" ]; then
-    DSH_BIN="${VENDOR_DSH_BIN}"
-    echo "[DSH Addon] Using vendor DSH (one-click updated): ${DSH_BIN}"
-    if [ -f "/data/dsh/vendor/.updated" ]; then
-        echo "[DSH Addon] Update marker: $(cat /data/dsh/vendor/.updated)"
+    # 验证 vendor DSH 完整性：package.json 可解析 + 全部运行时依赖可解析。
+    # 曾出现 vendor 装包不全导致 "Cannot find package '@deepseek-ai/cordis-plugin-group'"
+    # DSH 启动失败并进入 stopped 状态，因此损坏时必须自动回退内置版（DESIGN.md §9.6 风险表）。
+    if node -e "
+        const fs = require('fs');
+        const path = require('path');
+        const base = '${VENDOR_DIR}/node_modules';
+        const pkgPath = path.join(base, '@deepseek-ai/dsh/package.json');
+        try {
+          const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+          const deps = Object.keys(pkg.dependencies || {}).filter(
+            d => !(pkg.optionalDependencies || {})[d]
+          );
+          for (const d of deps) {
+            try { require.resolve(d, { paths: [base, path.dirname(pkgPath)] }); }
+            catch (e) { console.error('missing dep: ' + d); process.exit(1); }
+          }
+          console.log('vendor DSH integrity OK (deps: ' + deps.length + ')');
+        } catch (e) {
+          console.error('vendor DSH invalid: ' + e.message);
+          process.exit(1);
+        }
+    "; then
+        DSH_BIN="${VENDOR_DSH_BIN}"
+        echo "[DSH Addon] Using vendor DSH (one-click updated): ${DSH_BIN}"
+        if [ -f "${VENDOR_DIR}/.updated" ]; then
+            echo "[DSH Addon] Update marker: $(cat "${VENDOR_DIR}/.updated")"
+        fi
+    else
+        echo "[DSH Addon] ERROR: vendor DSH corrupted (missing deps) - removing and falling back to built-in"
+        rm -rf "${VENDOR_DIR}"
+        DSH_BIN="/usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js"
+        echo "[DSH Addon] Using built-in DSH: ${DSH_BIN}"
     fi
 else
     DSH_BIN="/usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js"
@@ -198,6 +228,42 @@ EOMCP
     echo "[DSH Addon]   MCP patch: ${DSH_HOME}/cordis.patch.yml"
 else
     echo "[DSH Addon] HA MCP disabled (set ha_mcp_enabled=true + ha_mcp_url to enable)"
+fi
+
+# ===== B 底座：修复 dsh-im 插件 RPC 权威校验 =====
+# dsh-im 插件默认 rpcAuthority: 'loopback'，仅允许回环 IP 请求。
+# 在 HA Ingress 代理环境下，请求来源 IP 不是 127.0.0.1，导致 RPC 调用返回 404。
+# 修复：在插件 bundle patch 中注入 rpcAuthority: 'trusted-host'，绕过 IP 校验。
+export DSH_IM_PATCH="${DSH_HOME}/profiles/web/node_modules/@xmanrui/dsh-im/cordis.patch.yml"
+if [ -f "${DSH_IM_PATCH}" ]; then
+    if ! grep -q "rpcAuthority" "${DSH_IM_PATCH}" 2>/dev/null; then
+        echo "[DSH Addon]   Patching dsh-im rpcAuthority -> trusted-host..."
+        node << 'NODESCRIPT'
+const fs = require('fs');
+const path = process.env.DSH_IM_PATCH || '';
+if (!path) { process.exit(0); }
+try {
+  let content = fs.readFileSync(path, 'utf8');
+  if (!content.includes('rpcAuthority')) {
+    // 使用正则匹配 name: '@xmanrui/dsh-im'（任意缩进），
+    // 在 name 行下方插入 config: 行（缩进对齐name），避免字符串replace缩进不匹配。
+    content = content.replace(
+      /^(\s*)name: '@xmanrui\/dsh-im'$/m,
+      "$1name: '@xmanrui/dsh-im'\n$1config:\n$1  rpcAuthority: trusted-host"
+    );
+    fs.writeFileSync(path, content);
+    console.log('[DSH Addon]   dsh-im rpcAuthority patched to trusted-host');
+  }
+} catch (e) {
+  console.log('[DSH Addon]   dsh-im patch error: ' + e.message);
+}
+NODESCRIPT
+    else
+        echo "[DSH Addon]   dsh-im rpcAuthority already set (skipped)"
+    fi
+else
+    echo "[DSH Addon]   dsh-im plugin not found at ${DSH_IM_PATCH} - skipping rpcAuthority patch"
+    echo "[DSH Addon]   This is expected if dsh-im is not installed via the DSH plugin marketplace"
 fi
 
 # ===== 检查 DSH 版本（仅显示，不自动更新）=====
