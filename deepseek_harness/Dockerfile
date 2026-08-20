@@ -42,9 +42,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /data/dsh
 
-# 使用国内 npm 镜像安装 @deepseek-ai/dsh
+# 使用国内 npm 镜像安装 @deepseek-ai/dsh（next 通道 = rc.8+）
+# 注意：@next 通道包含最新 RC 版本，确保插件版本与核心一致
+# 避免出现 rc.7 核心 + rc.8 插件导致的模块表不匹配问题
 RUN npm config set registry https://registry.npmmirror.com \
-    && npm install -g @deepseek-ai/dsh \
+    && npm install -g @deepseek-ai/dsh@next \
     && ln -sf /usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js /usr/local/bin/dsh \
     && rm -f /usr/local/lib/node_modules/.package-lock.json 2>/dev/null
 
