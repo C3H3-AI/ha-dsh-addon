@@ -12,6 +12,10 @@ ARG BUILD_FROM="node:22-bookworm-slim"
 # ============================================================
 FROM ${BUILD_FROM}
 
+# 重新声明 ARG 使其在构建阶段可用（预声明在 FROM 之前的 ARG 不在同一作用域）
+ARG BUILD_VERSION
+ARG BUILD_ARCH
+
 # Labels
 LABEL \
     io.hass.version="${BUILD_VERSION}" \
