@@ -4,7 +4,7 @@
 #
 # IMPORTANT: the add-on and the companion custom_component are
 # versioned on SEPARATE tracks BY DESIGN (see docs/DESIGN.md §1:
-# "Addon 版本 0.2.15（配套集成 deepseek_harness 为 0.2.0）").
+# "Addon 版本 0.2.16（配套集成 deepseek_harness 为 0.2.0）").
 #
 # We therefore verify INTERNAL consistency WITHIN each track,
 # never across tracks:

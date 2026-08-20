@@ -17,7 +17,7 @@
 
 | 属性 | 值 |
 |------|-----|
-| Addon 版本 | `0.2.15`（配套集成 `deepseek_harness` 为 `0.2.0`） |
+| Addon 版本 | `0.2.16`（配套集成 `deepseek_harness` 为 `0.2.0`） |
 | DSH 依赖 | `@deepseek-ai/dsh`（npm，latest=rc.7 / next=rc.8） |
 | Bridge API 鉴权 | 共享密钥 `api_token`（`Bearer`，写操作必带，fail-closed） |
 | Web UI 端口 | Ingress 3080（对外）→ DSH 127.0.0.1:3081（内部） |
@@ -206,10 +206,10 @@ addon 壳与配套集成 `deepseek_harness` 采用**独立版本轨道**（见 �
 
 | 轨道 | 文件 | 约束 |
 |------|------|------|
-| addon 轨 | `config.yaml` 的 `version` + `Dockerfile` 的 `ARG BUILD_VERSION` / `io.hass.version` label | 二者必须相等（当前 `0.2.15`） |
+| addon 轨 | `config.yaml` 的 `version` + `Dockerfile` 的 `ARG BUILD_VERSION` / `io.hass.version` label | 二者必须相等（当前 `0.2.16`） |
 | 集成轨 | `custom_components/deepseek_harness/const.py` 的 `VERSION` + `manifest.json` 的 `version` | 二者必须相等（当前 `0.2.0`） |
 
-- **两轨不跨轨比较**：addon 0.2.15 ≠ 集成 0.2.0 是**正确且既定**的设计，并非版本漂移。
+- **两轨不跨轨比较**：addon 0.2.16 ≠ 集成 0.2.0 是**正确且既定**的设计，并非版本漂移。
 - （构建时）Supervisor 的 `apps.json` 缓存仍需随 addon 轨版本同步更新并重启 Supervisor 刷新（见下方"Supervisor apps.json 缓存"说明）。
 - 仓库内置 `scripts/check-versions.sh` 在 CI 中校验**双轨各自一致**，避免曾出现的 `const.py`(0.1.0) 与 `manifest.json`(0.2.0) 漂移类问题。
 
