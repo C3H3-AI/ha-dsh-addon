@@ -1,14 +1,16 @@
-ARG BUILD_VERSION="0.2.13"
+ARG BUILD_VERSION="0.2.14"
 ARG BUILD_ARCH="aarch64"
+ARG BUILD_FROM="node:22-bookworm-slim"
 
 # ============================================================
-# 单阶段构建：使用 node:22-bookworm（Debian 基础镜像）
+# 单阶段构建：使用 node:22-bookworm-slim（Debian 基础镜像）
 # 不使用 Alpine（避免 node-pty 等原生模块的 musl/glibc 兼容性问题）
 # 不使用 HA 基础镜像（避免 s6-overlay PID 1 限制）
 # 配置通过 /data/options.json 读取（HA Supervisor 挂载）
 # npm install 使用国内镜像源，避免低性能设备上超时
+# build_from 由 build.yaml 传入，需在 FROM 之后才能在 LABEL/后续使用
 # ============================================================
-FROM node:22-bookworm-slim
+FROM ${BUILD_FROM}
 
 # Labels
 LABEL \
@@ -47,9 +49,10 @@ COPY run.sh /run.sh
 COPY api_server.js /api_server.js
 RUN chmod a+x /run.sh
 
-# 健康检查（检查 DSH 实际监听的端口 3081，代理端口 3080 仅用于对外通信）
+# 健康检查：同时探 DSH web (3081) 与 bridge API (3082)
+# 区分"web 挂"与"bridge 挂"：任一不可达都视为不健康，触发 Supervisor 重建
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD wget -qO- http://127.0.0.1:3081 || exit 1
+    CMD wget -qO- http://127.0.0.1:3081 >/dev/null 2>&1 && wget -qO- http://127.0.0.1:3082/api/status >/dev/null 2>&1 || exit 1
 
 WORKDIR /config
 CMD [ "/run.sh" ]

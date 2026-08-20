@@ -15,6 +15,7 @@ CONFIG_PATH=/data/options.json
 # 添加 fallback 机制确保启动稳定
 if [ -f "${CONFIG_PATH}" ]; then
     API_KEY=$(jq -r '.api_key // ""' "${CONFIG_PATH}")
+    API_TOKEN=$(jq -r '.api_token // ""' "${CONFIG_PATH}")
     MODEL=$(jq -r '.model // "deepseek-v4-flash"' "${CONFIG_PATH}")
     PROVIDER=$(jq -r '.provider // "deepseek-official"' "${CONFIG_PATH}")
     BASE_URL=$(jq -r '.base_url // ""' "${CONFIG_PATH}")
@@ -27,6 +28,7 @@ if [ -f "${CONFIG_PATH}" ]; then
     HA_MCP_TOKEN=$(jq -r '.ha_mcp_token // ""' "${CONFIG_PATH}")
 elif [ -n "${HASSIO_OPTIONS}" ]; then
     API_KEY=$(echo "${HASSIO_OPTIONS}" | jq -r '.api_key // ""')
+    API_TOKEN=$(echo "${HASSIO_OPTIONS}" | jq -r '.api_token // ""')
     MODEL=$(echo "${HASSIO_OPTIONS}" | jq -r '.model // "deepseek-v4-flash"')
     PROVIDER=$(echo "${HASSIO_OPTIONS}" | jq -r '.provider // "deepseek-official"')
     BASE_URL=$(echo "${HASSIO_OPTIONS}" | jq -r '.base_url // ""')
@@ -40,6 +42,7 @@ elif [ -n "${HASSIO_OPTIONS}" ]; then
 else
     echo "[DSH Addon] WARNING: No config file found, using defaults"
     API_KEY=""
+    API_TOKEN=""
     MODEL="deepseek-v4-flash"
     PROVIDER="deepseek-official"
     BASE_URL=""
@@ -57,9 +60,16 @@ echo "[DSH Addon]   Model: ${MODEL}"
 echo "[DSH Addon]   Provider: ${PROVIDER}"
 echo "[DSH Addon]   Preset: ${PRESET}"
 echo "[DSH Addon]   Bridge API port: ${API_PORT}"
+if [ -n "${API_TOKEN}" ]; then
+    echo "[DSH Addon]   Bridge API auth: enabled (api_token set)"
+else
+    echo "[DSH Addon]   Bridge API auth: DISABLED - 写操作将返回 401（请设置 api_token）"
+fi
 
 # 导出环境变量供 DSH 使用
 export DEEPSEEK_API_KEY="${API_KEY}"
+# 桥接 API 共享密钥（集成侧需填相同值）
+export DSH_API_TOKEN="${API_TOKEN}"
 # 重要：DSH_HOME 必须指向持久化目录！
 # HA Supervisor 为每个 addon 提供持久化的 /data 目录（容器重建后不丢失），
 # 而 /root/.dsh 是容器内普通目录，addon 重建/重启后会被清空。
@@ -68,7 +78,21 @@ export DEEPSEEK_API_KEY="${API_KEY}"
 # 若指向非持久化目录则对话记录和设置会在重启后全部丢失。
 export DSH_HOME="/data/dsh"
 export DSH_API_PORT="${API_PORT}"
-DSH_BIN="/usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js"
+
+# ===== DSH 运行路径解析：一键更新(vendor) 优先，否则镜像内置 =====
+# Web 一键更新（DESIGN.md §8）会把新版 DSH 装到 /data/dsh/vendor（持久化），
+# 因此容器每次启动都要优先加载 vendor 里的新版，镜像内置版仅作离线兜底。
+VENDOR_DSH_BIN="/data/dsh/vendor/node_modules/@deepseek-ai/dsh/lib/bin.js"
+if [ -f "${VENDOR_DSH_BIN}" ]; then
+    DSH_BIN="${VENDOR_DSH_BIN}"
+    echo "[DSH Addon] Using vendor DSH (one-click updated): ${DSH_BIN}"
+    if [ -f "/data/dsh/vendor/.updated" ]; then
+        echo "[DSH Addon] Update marker: $(cat /data/dsh/vendor/.updated)"
+    fi
+else
+    DSH_BIN="/usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js"
+    echo "[DSH Addon] Using built-in DSH: ${DSH_BIN}"
+fi
 export DSH_BIN
 
 # 注意：--expose-internals 不能在 NODE_OPTIONS 中设置，必须作为命令行参数传递
@@ -171,6 +195,8 @@ const net = require('net');
 
 const DSH_PORT = 3081;
 const PROXY_PORT = 3080;
+const BRIDGE_PORT = parseInt(process.env.DSH_API_PORT || '3082', 10);
+const BRIDGE_TOKEN = process.env.DSH_API_TOKEN || '';
 
 function log() {
     const args = ['[' + new Date().toISOString() + ']'].concat(Array.from(arguments));
@@ -192,6 +218,43 @@ const server = http.createServer((req, res) => {
             remote: req.headers['x-remote-user-id'] || '(none)',
             timestamp: new Date().toISOString()
         }));
+        return;
+    }
+
+    // 一键更新端点：/__dsh_update* -> bridge API :3082（代理注入 token，浏览器无需持有）
+    // 仅允许 GET/POST；POST 由 bridge 内部做 fail-closed 鉴权
+    // 安全：此通道会主动注入 BRIDGE_TOKEN，等效于把 bridge 的 token 鉴权架空，
+    // 因此必须限定来源为 HA ingress（带 x-ingress-path 头），
+    // 防止容器网络内其它 addon/进程直连 3080 免 token 触发 npm install/容器重启。
+    if (req.url.indexOf('/__dsh_update') === 0) {
+        if (!ingressPath) {
+            log('[HTTP-' + reqId + ']', 'update denied: no x-ingress-path (non-ingress source)');
+            res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ ok: false, error: 'forbidden: update endpoint is ingress-only' }));
+            return;
+        }
+        const bridgePath = '/api' + req.url.slice('/__dsh_update'.length);
+        const headers = Object.assign({}, req.headers);
+        delete headers['host'];
+        delete headers['origin'];
+        delete headers['x-ingress-path'];
+        if (BRIDGE_TOKEN) headers['Authorization'] = 'Bearer ' + BRIDGE_TOKEN;
+        const b = http.request({
+            hostname: '127.0.0.1',
+            port: BRIDGE_PORT,
+            path: bridgePath,
+            method: req.method,
+            headers: headers
+        }, (bres) => {
+            log('[HTTP-' + reqId + ']', 'bridge relay:', req.method, bridgePath, '->', bres.statusCode);
+            res.writeHead(bres.statusCode, { 'Content-Type': 'application/json; charset=utf-8' });
+            bres.pipe(res);
+        });
+        b.on('error', (e) => {
+            res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ ok: false, error: 'bridge relay failed: ' + e.message }));
+        });
+        req.pipe(b);
         return;
     }
 
@@ -449,8 +512,63 @@ const server = http.createServer((req, res) => {
                     '</script>'
                 ].join('\n');
 
+                // ===== 一键更新按钮（DESIGN.md §8）=====
+                // 浮动按钮调用 /__dsh_update*，由 HTTP 代理中转注入 token 到 bridge API。
+                // 流程：检查更新(GET status) -> 一键更新(POST) -> 轮询 result -> 容器重启。
+                const updateUiScript = [
+                    '<style>',
+                    '#dsh-update-btn { position:fixed; right:16px; bottom:16px; z-index:99999; ',
+                    '  background:#185fa5; color:#fff; border:none; border-radius:20px; padding:8px 16px;',
+                    '  font-size:13px; cursor:pointer; box-shadow:0 2px 8px rgba(0,0,0,.25); display:none; }',
+                    '#dsh-update-btn:hover { background:#0c447c; }',
+                    '#dsh-update-status { position:fixed; right:16px; bottom:52px; z-index:99999; ',
+                    '  background:rgba(20,20,20,.85); color:#fff; padding:8px 12px; border-radius:8px;',
+                    '  font-size:12px; max-width:320px; display:none; white-space:pre-line; }',
+                    '</style>',
+                    '<button id="dsh-update-btn">DSH 更新</button>',
+                    '<div id="dsh-update-status"></div>',
+                    '<script>',
+                    '(function(){',
+                    '  var btn = document.getElementById("dsh-update-btn");',
+                    '  var box = document.getElementById("dsh-update-status");',
+                    '  var BASE = "' + ingressPath + '";',
+                    '  function api(path, opts) {',
+                    '    var url = BASE + path;',
+                    '    return fetch(url, Object.assign({ headers: { "Content-Type": "application/json" } }, opts || {}));',
+                    '  }',
+                    '  function show(msg, isErr) { box.style.display = "block"; box.textContent = msg; box.style.border = isErr ? "1px solid #e24b4a" : "1px solid #1d9e75"; }',
+                    '  btn.addEventListener("click", function() {',
+                    '    if (btn.dataset.busy === "1") return;',
+                    '    btn.dataset.busy = "1";',
+                    '    api("/__dsh_update/status").then(function(r){ return r.json(); }).then(function(s){',
+                    '      if (!s.ok) { show("更新服务不可用: " + (s.error || "unknown")); btn.dataset.busy = "0"; return; }',
+                    '      var cur = s.current + (s.usingVendor ? " (vendor)" : " (builtin)");',
+                    '      var latest = s.latest || "?";',
+                    '      var next = s.next || "?";',
+                    '      if (next && next !== cur) {',
+                    '        if (confirm("当前: " + cur + "\\n上游 next: " + next + "\\n\\n一键更新到 " + next + "？更新完成后容器将自动重启。")) {',
+                    '          show("正在更新到 " + next + " ...");',
+                    '          api("/__dsh_update", { method: "POST", body: JSON.stringify({ channel: "next" }) }).then(function(r){ return r.json(); }).then(function(u){',
+                    '            if (u.ok) { show("更新中... 完成后容器将自动重启，请稍候刷新页面。"); setTimeout(function(){ location.reload(); }, 8000); }',
+                    '            else { show("更新失败: " + (u.error || "unknown"), true); btn.dataset.busy = "0"; }',
+                    '          }).catch(function(e){ show("更新请求失败: " + e.message, true); btn.dataset.busy = "0"; });',
+                    '        } else { btn.dataset.busy = "0"; }',
+                    '      } else {',
+                    '        show("已是最新\\n当前: " + cur + "\\nlatest: " + latest + " / next: " + next);',
+                    '        btn.dataset.busy = "0";',
+                    '        setTimeout(function(){ box.style.display = "none"; }, 4000);',
+                    '      }',
+                    '    }).catch(function(e){ show("获取更新状态失败: " + e.message, true); btn.dataset.busy = "0"; });',
+                    '  });',
+                    '  api("/__dsh_update/status").then(function(r){ return r.json(); }).then(function(s){',
+                    '    if (s.ok && s.next && s.next !== s.current) { btn.style.display = "inline-block"; }',
+                    '  }).catch(function(){});',
+                    '})();',
+                    '</script>'
+                ].join('\n');
+
                 const baseTag = '<base href="' + baseHref + '">\n';
-                body = body.replace('<head>', '<head>' + baseTag + mobileCss + loopbackFixScript + cryptoPolyfillScript + ingressFixScript + storageDiagScript);
+                body = body.replace('<head>', '<head>' + baseTag + mobileCss + loopbackFixScript + cryptoPolyfillScript + ingressFixScript + storageDiagScript + updateUiScript);
 
                 const headers = cleanHeaders(proxyRes.headers);
                 headers['content-length'] = Buffer.byteLength(body, 'utf-8');

@@ -1,0 +1,12 @@
+# 强制 LF 行尾：Dockerfile/脚本/代码在 Linux 容器中执行，CRLF 会破坏构建与运行
+* text=auto
+
+# 容器关键文件必须 LF（CRLF 会导致 Dockerfile 续行、shell 脚本 shebang 报错）
+Dockerfile text eol=lf
+*.sh text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.js text eol=lf
+*.py text eol=lf
+*.json text eol=lf
+*.md text eol=lf

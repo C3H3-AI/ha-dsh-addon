@@ -1,0 +1,17 @@
+# 临时/调试/scratch 文件（不进仓库）
+.scratch/
+debug/
+commit_msg*.txt
+debug_proxy*.js
+test_api*.js
+test_dsh_proxy.js
+
+# 系统与编辑器
+*.log
+*.swp
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
