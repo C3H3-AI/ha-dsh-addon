@@ -57,6 +57,8 @@ DSH 处于测试期（rc.x），更新频繁。本 addon 提供 Web 一键更新
 
 `/data/dsh/` 位于 addon 的 `/data` 目录，**随 HA 的 addon 备份自动包含**（会话记录、设置、vendor 更新均被覆盖）。无需额外备份配置。
 
+> **注意**：卸载 addon 或变更 slug 会清空 `/data` 目录，属于预期行为。如果你需要保留对话历史，请在卸载前手动备份 `/data/dsh/`。正常更新 addon（包括 rebuild）时 `/data` 必定保留，无需担心。
+
 ## 版本通道
 
 | 通道 | 说明 |

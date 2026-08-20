@@ -22,6 +22,9 @@ options:
   model: "deepseek-v4-flash"
   provider: "deepseek-official"
   base_url: ""
+  # workspace: DSH 工作区路径，默认 /config（HA 配置目录，持久化）。
+  # 如需自定义，务必选择持久化路径（/config 或 /data 下），
+  # 否则容器重建后工作区内容会丢失（DESIGN.md §4）。
   workspace: ""
   preset: "standard"
   auto_start: true

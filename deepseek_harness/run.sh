@@ -116,6 +116,50 @@ fi
 # 创建 DSH 数据目录
 mkdir -p "${DSH_HOME}"
 
+# ===== 数据持久化自检探针（轻量级诊断，不执行任何恢复动作）=====
+# 目的：addon 更新/重启后，运维可从启动日志直接确认数据是否完好，
+# 避免"会话/设置丢失"只能等用户报告才发现（DESIGN.md §4）。
+# 只读检查 + 日志输出，不做任何写操作或自动恢复。
+DATA_PROBE_FAIL=0
+
+# 1. 数据目录存在性与可写性
+if [ ! -d "${DSH_HOME}" ] || [ ! -w "${DSH_HOME}" ]; then
+    echo "[DSH Addon] ERROR: DSH_HOME (${DSH_HOME}) missing or not writable - 数据持久化将失败！"
+    DATA_PROBE_FAIL=1
+fi
+
+# 2. 会话数据存在性（只读统计，供重启前后对比）
+if [ -d "${DSH_HOME}/sessions" ]; then
+    SESSION_COUNT=$(find "${DSH_HOME}/sessions" -name '*.jsonl.zstd' 2>/dev/null | wc -l)
+    echo "[DSH Addon] Data probe: sessions dir exists, ${SESSION_COUNT} session file(s)"
+    if [ "${SESSION_COUNT}" -eq 0 ]; then
+        echo "[DSH Addon] WARNING: sessions dir is empty - 若非首次启动，历史会话可能已丢失（见 DESIGN.md §4）"
+    fi
+else
+    echo "[DSH Addon] INFO: sessions dir not present (expected on first start)"
+fi
+
+# 3. 设置文件存在性
+if [ -f "${DSH_HOME}/settings.yaml" ]; then
+    echo "[DSH Addon] Data probe: settings.yaml present"
+else
+    echo "[DSH Addon] INFO: settings.yaml not present (will be generated below)"
+fi
+
+# 4. 工作区元数据（storages/）存在性
+if [ -d "${DSH_HOME}/storages" ]; then
+    echo "[DSH Addon] Data probe: storages/ (workspace metadata) present"
+else
+    echo "[DSH Addon] INFO: storages/ not present (expected on first start)"
+fi
+
+# 数据目录不可用属于致命错误：/data 不可写则一切数据无法持久化，
+# 立即退出让 Supervisor 标记失败，避免"看似正常运行实则数据全丢"。
+if [ "${DATA_PROBE_FAIL}" -eq 1 ]; then
+    echo "[DSH Addon] FATAL: /data persistence unavailable - aborting to avoid data loss"
+    exit 1
+fi
+
 # 写入 DSH 配置文件（模型提供商配置）
 DSH_CONFIG="${DSH_HOME}/settings.yaml"
 if [ ! -f "${DSH_CONFIG}" ]; then
