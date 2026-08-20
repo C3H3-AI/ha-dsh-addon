@@ -1,0 +1,23 @@
+{
+  "title": "DeepSeek Harness",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Configure DeepSeek Harness",
+        "description": "Connect to the running DeepSeek Harness add-on.",
+        "data": {
+          "host": "Add-on hostname",
+          "port": "API port",
+          "timeout": "Chat timeout (seconds)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "runtime_status": {
+        "name": "Runtime Status"
+      }
+    }
+  }
+}

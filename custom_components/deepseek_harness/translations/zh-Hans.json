@@ -1,0 +1,23 @@
+{
+  "title": "DeepSeek Harness",
+  "config": {
+    "step": {
+      "user": {
+        "title": "配置 DeepSeek Harness",
+        "description": "连接到运行中的 DeepSeek Harness add-on。",
+        "data": {
+          "host": "Add-on 主机名",
+          "port": "API 端口",
+          "timeout": "对话超时（秒）"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "runtime_status": {
+        "name": "运行时状态"
+      }
+    }
+  }
+}
