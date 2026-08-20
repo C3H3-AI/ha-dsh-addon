@@ -1,4 +1,4 @@
-ARG BUILD_VERSION="0.2.17"
+ARG BUILD_VERSION="0.2.18"
 ARG BUILD_ARCH="aarch64"
 ARG BUILD_FROM="node:22-bookworm-slim"
 
@@ -42,13 +42,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /data/dsh
 
-# 使用国内 npm 镜像安装 @deepseek-ai/dsh（next 通道 = rc.8+）
-# 注意：@next 通道包含最新 RC 版本，确保插件版本与核心一致
-# 避免出现 rc.7 核心 + rc.8 插件导致的模块表不匹配问题
-RUN npm config set registry https://registry.npmmirror.com \
-    && npm install -g @deepseek-ai/dsh@next \
+# 安装 @deepseek-ai/dsh（使用官方 registry，npmmirror 镜像落后一个版本）
+# npmjs.org 有 rc.7，npmmirror 只有 rc.6（rc.7 修复了模块表不匹配问题）
+# 若官方 registry 超时，可回退到 npmmirror（但需注意版本滞后）
+RUN npm install -g @deepseek-ai/dsh@0.1.0-rc.7 \
     && ln -sf /usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js /usr/local/bin/dsh \
     && rm -f /usr/local/lib/node_modules/.package-lock.json 2>/dev/null
+
+# 清理 vendor 目录（避免旧版本 vendor DSH 污染新安装）
+# 同时清理 .npm 缓存减少镜像层大小
+RUN rm -rf /data/dsh/vendor /data/dsh/vendor.tmp /data/dsh/vendor.old \
+    && npm cache clean --force 2>/dev/null || true
 
 # 拷贝启动脚本、代理、桥接 API 服务
 COPY run.sh /run.sh
