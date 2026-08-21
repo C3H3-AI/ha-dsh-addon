@@ -231,13 +231,35 @@ const server = http.createServer((req, res) => {
                 });
                 body = body.replace(/"url"\s*:\s*"\/plugins\//g, '"url":"' + ingressPath + '/plugins/');
 
-                // 注入 Ingress 路径修复脚本：patch fetch 和 WebSocket 以使用正确的 Ingress 路径
-                // 关键：DSH 客户端代码使用 new URL(path, location.origin) 构造 URL 对象，
-                // 然后直接传给 fetch(new URL(...))，所以 url 参数是 URL 对象，不是字符串！
-                // 注入移动端响应式样式
-                // 注意：不再改动三栏布局（sidebarCol/centerCol/detailsCol），
-                // 只修复对话框在手机上可能被遮挡或不可见的问题。
-                // DSH 自身的三栏布局在小屏上会自然压缩，无需干预。
+                // ===== 注入 Ingress 路径修复脚本 =====
+                // 仅重写 WebSocket URL（不拦截 fetch，避免 SPA 卡死）。
+                // DSH 使用 new URL(path, location.origin) 构造 WebSocket 地址，
+                // 得到 wss://api.homediy.top:8443/api/events.host，但 Ingress 要求
+                // wss://api.homediy.top:8443/api/hassio_ingress/TOKEN/api/events.host。
+                // 只对 WebSocket 做 URL 重写，fetch 由 <base> 标签处理。
+                const wsRewriteScript = [
+                    '<script>',
+                    '(function(){',
+                    '  var BASE = "' + ingressPath + '";',
+                    '  if (!BASE) return;',
+                    '  var ORIGIN = window.location.origin;',
+                    '  function wsRewrite(url) {',
+                    '    var path = typeof url === "string" ? url : (url && url.url) || "";',
+                    '    if (path.startsWith(BASE)) return null;',
+                    '    if (path.indexOf("/api/") === 0) {',
+                    '      return ORIGIN + BASE + path;',
+                    '    }',
+                    '    return null;',
+                    '  }',
+                    '  var OrigWS = window.WebSocket;',
+                    '  window.WebSocket = function(url, protocols) {',
+                    '    var rewritten = wsRewrite(url);',
+                    '    if (rewritten) { url = rewritten; }',
+                    '    return new OrigWS(url, protocols);',
+                    '  };',
+                    '})();',
+                    '</script>'
+                ].join('\n');
                 const mobileCss = [
                     '<style>',
                     '@media (max-width: 768px) {',
@@ -569,7 +591,7 @@ const server = http.createServer((req, res) => {
                 ].join('\n');
 
                 const baseTag = '<base href="' + baseHref + '">\n';
-                body = body.replace('<head>', '<head>' + baseTag + mobileCss + loopbackFixScript + cryptoPolyfillScript + updateUiScript + pluginUiScript);
+                body = body.replace('<head>', '<head>' + baseTag + mobileCss + loopbackFixScript + cryptoPolyfillScript + wsRewriteScript + updateUiScript + pluginUiScript);
 
                 const headers = cleanHeaders(proxyRes.headers);
                 headers['content-length'] = Buffer.byteLength(body, 'utf-8');
