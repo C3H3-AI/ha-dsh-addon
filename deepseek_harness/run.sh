@@ -139,8 +139,8 @@ if [ -n "${WORKSPACE}" ]; then
     export DSH_WORKSPACE="${WORKSPACE}"
     echo "[DSH Addon]   Workspace: ${WORKSPACE}"
 else
-    export DSH_WORKSPACE="/config"
-    echo "[DSH Addon]   Workspace: /config (HA 配置目录)"
+    export DSH_WORKSPACE="/data/dsh/workspace"
+    echo "[DSH Addon]   Workspace: /data/dsh/workspace (DSH 工作区)"
 fi
 
 # 创建 DSH 数据目录

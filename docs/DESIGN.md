@@ -91,9 +91,9 @@
 - **教训**：早期`DSH_HOME`指向容器普通目录 `/root/.dsh`，`/root` 在 addon 重建时被清空，导致对话记录、设置全部丢失。
 - **方案**：`export DSH_HOME="/data/dsh"`（HA Supervisor 自动持久化的 addon 数据目录，容器重建不丢）。
 
-### 3.2 工作区路径：默认 `/config`，注意手动覆盖
+### 3.2 工作区路径：默认 `/data/dsh/workspace`，注意手动覆盖
 
-- `run.sh` 第 107–113 行显式将 `DSH_WORKSPACE` 默认设为 `/config`（HA 配置目录，经 `map: config:rw` 持久化）。
+- `run.sh` 将 `DSH_WORKSPACE` 默认设为 `/data/dsh/workspace`（`/data` 持久化目录，独立于 HA 配置）。
 - 用户可通过 addon 配置项 `workspace` 手动覆盖；若设为非持久化目录（如 `/root/xxx`），容器重建后该目录内容丢失。
 - **注意**：DSH 的 Workspace API 允许用户在 UI 中创建新的 workspace，其路径用户自行填写。`/root/test` 即用户手动创建的结果，并非 addon 默认行为。建议用户创建 workspace 时选择持久化路径。
 
@@ -114,8 +114,8 @@
 | 事实 | 证据 |
 |------|------|
 | `DSH_HOME=/data/dsh` | run.sh 第 79 行显式定义，注释声明所有用户数据在 `$DSH_HOME` 下 |
-| 工作区默认 `/config` | run.sh 第 107–113 行：`else export DSH_WORKSPACE="/config"` |
-| `map: config:rw` 持久化 `/config` | config.yaml 第 18 行 |
+| 工作区默认 `/data/dsh/workspace` | run.sh：`else export DSH_WORKSPACE="/data/dsh/workspace"` |
+| `/data` 持久化 | config.yaml 第 18 行 `map: config:rw` |
 | HA Supervisor 的 `/data` 在 addon **更新**时必定保留 | 这是 Supervisor 的固有行为——更新（包括 rebuild）不改 `/data` 卷；只有卸载重装或 slug 变更才会清空 |
 | 设置/凭据在 rebuild 后幸存 | 多次验证：`settings.yaml`、`credentials` 在 rebuild 后完好 |
 | 浏览器端 `isLoopback=false` 时设置退回 memory 模式 | 这是 isLoopback 伪装机制要解决的根本问题（§6） |
