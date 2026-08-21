@@ -44,8 +44,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # 安装 pnpm（用于 DSH 插件管理，dsh plugin CLI 依赖 pnpm）
 # 国内网络使用 npmmirror 镜像源加速
+# pnpm 8+ 默认把 global bin 目录放到 ~/.local/share/pnpm/bin（不在 PATH）导致
+# `pnpm config` 报 "not in PATH" 构建失败；将其显式设为 /usr/local/bin（已在 PATH）。
+# 同时把 /usr/local/share/pnpm 放入 PATH，保证运行时 run.sh 调用 dsh plugin 也能找到 pnpm。
+ENV PATH="/usr/local/share/pnpm:/usr/local/bin:${PATH}"
 RUN npm install -g pnpm \
-    && pnpm config --global set registry https://registry.npmmirror.com
+    && pnpm config set global-bin-dir /usr/local/bin --global \
+    && pnpm config set registry https://registry.npmmirror.com --global
 
 # 安装 @deepseek-ai/dsh（使用 @next = rc.8，避免 rc.7 的 bundle 结构问题）
 # latest tag (rc.7) 的 dsh-client-connection 在 rc.8 子包中被拆分为 client/host 两个入口，
