@@ -231,40 +231,89 @@ const server = http.createServer((req, res) => {
                 });
                 body = body.replace(/"url"\s*:\s*"\/plugins\//g, '"url":"' + ingressPath + '/plugins/');
 
-                // ===== 注入 Ingress 路径修复脚本 =====
-                // 重写 fetch 和 WebSocket 的 /api/ 路径，加上 Ingress 前缀。
-                // 注意：只拦截 /api/ 开头的请求，不拦截所有 fetch/WS（避免 SPA 卡死）。
-                // <base> 标签不影响 JavaScript fetch()，所以需要在 JS 层重写。
+                // ===== 通用 Ingress 路径修复脚本 =====
+                // 核心问题：DSH SPA 通过 fetch/WebSocket/XHR/SSE 请求后端，但 HA Ingress
+                // 要求所有请求必须带前缀 /api/hassio_ingress/<token>/。
+                // 插件可以注册任意路径（/api/、/plugins/、/dsh-market/、/custom/...），
+                // 无法穷举白名单，因此改为「通用拦截」：
+                //
+                // 规则：拦截所有同源请求，如果路径是相对路径（以 / 开头），
+                // 统一加上 Ingress 前缀。不同源的请求（如 npm registry）不处理。
+                //
+                // 覆盖：fetch / WebSocket / XMLHttpRequest / EventSource(SSE)
                 const ingressRewriteScript = [
                     '<script>',
                     '(function(){',
                     '  var BASE = "' + ingressPath + '";',
                     '  if (!BASE) return;',
                     '  var ORIGIN = window.location.origin;',
+                    '',
+                    '  // ===== 通用 URL 重写 =====',
+                    '  // 返回重写后的 URL 字符串，或 null（无需重写）',
                     '  function rewrite(url) {',
-                    '    var path = typeof url === "string" ? url : (url && url.pathname) || "";',
-                    '    if (path.startsWith(BASE)) return null;',
-                    '    // 处理绝对 URL：提取 pathname 再匹配',
+                    '    var urlStr = (typeof url === "string") ? url : (url && (url.url || url.pathname || "")) || "";',
+                    '    if (!urlStr) return null;',
+                    '    // 已带前缀的不重复处理',
+                    '    if (urlStr.indexOf(BASE) !== -1) return null;',
+                    '    // 提取路径部分',
+                    '    var path = urlStr;',
                     '    if (path.indexOf("://") > 0) {',
-                    '      try { path = new URL(path).pathname; } catch(e) { return null; }',
+                    '      try {',
+                    '        var u = new URL(path);',
+                    '        if (u.origin !== ORIGIN) return null; // 不同源（如 npm registry）跳过',
+                    '        path = u.pathname;',
+                    '      } catch(e) { return null; }',
                     '    }',
-                    '    if (path.indexOf("/api/") === 0 || path.indexOf("/plugins/") === 0 || path.indexOf("/dsh-market/") === 0) {',
-                    '      return ORIGIN + BASE + path;',
-                    '    }',
-                    '    return null;',
+                    '    // 只处理相对路径（以 / 开头）',
+                    '    if (path.indexOf("/") !== 0) return null;',
+                    '    return ORIGIN + BASE + path;',
                     '  }',
+                    '',
+                    '  // ===== 1. 拦截 fetch =====',
                     '  var origFetch = window.fetch;',
                     '  window.fetch = function(url, opts) {',
                     '    var rewritten = rewrite(url);',
-                    '    if (rewritten) { url = rewritten; }',
+                    '    if (rewritten) {',
+                    '      if (typeof url === "object" && url && url.url) {',
+                    '        // Request 对象 → 用重写后的 URL 创建新 Request',
+                    '        return origFetch.call(this, new Request(rewritten, url), opts);',
+                    '      }',
+                    '      url = rewritten;',
+                    '    }',
                     '    return origFetch.call(this, url, opts);',
                     '  };',
+                    '',
+                    '  // ===== 2. 拦截 WebSocket（保持 instanceof 兼容）=====',
                     '  var OrigWS = window.WebSocket;',
                     '  window.WebSocket = function(url, protocols) {',
                     '    var rewritten = rewrite(url);',
                     '    if (rewritten) { url = rewritten; }',
                     '    return new OrigWS(url, protocols);',
                     '  };',
+                    '  window.WebSocket.prototype = OrigWS.prototype;',
+                    '  window.WebSocket.CONNECTING = 0;',
+                    '  window.WebSocket.OPEN = 1;',
+                    '  window.WebSocket.CLOSING = 2;',
+                    '  window.WebSocket.CLOSED = 3;',
+                    '',
+                    '  // ===== 3. 拦截 XMLHttpRequest =====',
+                    '  var origOpen = XMLHttpRequest.prototype.open;',
+                    '  XMLHttpRequest.prototype.open = function(method, url, async, user, pass) {',
+                    '    var rewritten = rewrite(url);',
+                    '    if (rewritten) { url = rewritten; }',
+                    '    return origOpen.call(this, method, url, async, user, pass);',
+                    '  };',
+                    '',
+                    '  // ===== 4. 拦截 EventSource (SSE) =====',
+                    '  if (window.EventSource) {',
+                    '    var OrigES = window.EventSource;',
+                    '    window.EventSource = function(url, config) {',
+                    '      var rewritten = rewrite(url);',
+                    '      if (rewritten) { url = rewritten; }',
+                    '      return new OrigES(url, config);',
+                    '    };',
+                    '    window.EventSource.prototype = OrigES.prototype;',
+                    '  }',
                     '})();',
                     '</script>'
                 ].join('\n');
