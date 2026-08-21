@@ -146,6 +146,15 @@ fi
 # 创建 DSH 数据目录
 mkdir -p "${DSH_HOME}"
 
+# ===== 清理 DSH 运行时锁文件（异常退出后残留，导致启动失败）=====
+# task-board 的 ledger lock 在 DSH 异常退出后不会自动清理，
+# 下次启动时报 "task-board ledger is already owned by process XXX"。
+# 直接删除所有 lock 文件，DSH 正常启动时会重新创建。
+find "${DSH_HOME}" -name '*.lock' -o -name 'ledger-v2.lock' 2>/dev/null | while read lockfile; do
+    echo "[DSH Addon]   Cleaning stale lock: ${lockfile}"
+    rm -f "${lockfile}"
+done
+
 # ===== 数据持久化自检探针（轻量级诊断，不执行任何恢复动作）=====
 # 目的：addon 更新/重启后，运维可从启动日志直接确认数据是否完好，
 # 避免"会话/设置丢失"只能等用户报告才发现（DESIGN.md §4）。
