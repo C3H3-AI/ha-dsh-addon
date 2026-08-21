@@ -200,26 +200,6 @@ if [ "${DATA_PROBE_FAIL}" -eq 1 ]; then
     exit 1
 fi
 
-# ===== 部署 HA 自定义集成到 /config/custom_components/ =====
-# 镜像内 /custom_components/deepseek_harness/ 由 Dockerfile 打包，
-# 每次启动时复制到 HA Core 的配置目录，使 HA 能加载该集成。
-# 先清空目标目录避免旧文件残留，再完整复制。
-# 注意：/config 是 HA Supervisor 共享卷，addon 有 rw 权限（map: config:rw）。
-CC_SRC="/custom_components/deepseek_harness"
-CC_DST="/config/custom_components/deepseek_harness"
-if [ -d "${CC_SRC}" ]; then
-    echo "[DSH Addon] Deploying custom_components/deepseek_harness to HA..."
-    rm -rf "${CC_DST}"
-    mkdir -p "$(dirname "${CC_DST}")"
-    cp -a "${CC_SRC}" "${CC_DST}"
-    echo "[DSH Addon]   Deployed: $(find "${CC_DST}" -type f | wc -l) files"
-    # 清理 __pycache__ 防止 HA 加载缓存旧代码
-    find "${CC_DST}" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
-    echo "[DSH Addon]   Custom component deployed to ${CC_DST}"
-else
-    echo "[DSH Addon] WARNING: /custom_components not found in container (old image?) - skipping deployment"
-fi
-
 # 写入 DSH 配置文件（模型提供商配置）
 DSH_CONFIG="${DSH_HOME}/settings.yaml"
 if [ ! -f "${DSH_CONFIG}" ]; then
