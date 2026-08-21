@@ -602,34 +602,36 @@ const server = http.createServer((req, res) => {
             });
         } else if (pathOnly === '/api/host.describe' && contentType.includes('json')) {
             // 拦截 host.describe API，将 hostname 改为 127.0.0.1
-            // DSH 后端通过 host.describe 返回的 hostname 判断 isLoopback，
-            // HA Ingress 环境下 hostname 是外部域名，导致 isLoopback = false，
-            // 所有设置使用 persistence = "memory"，刷新丢失。
-            // 这里将 hostname 改为 127.0.0.1，使 DSH 使用 persistence = "host"。
+            // DSH 通过 host.describe 返回的信息判断环境（如 isLoopback、home 目录）。
+            // 在 HA Ingress 下，DSH 返回的 hostname 是外部域名、home 是容器内 /root，
+            // 导致 DSH 前端显示错误的主目录。这里统一改写。
             let body = '';
             proxyRes.on('data', (chunk) => { body += chunk.toString(); });
             proxyRes.on('end', () => {
                 try {
                     const data = JSON.parse(body);
-                    let patched = false;
-                    // 递归修改所有 hostname 字段
-                    (function patchHostname(obj) {
+                    let patched = [];
+                    // 递归修改 hostname 和 home 字段
+                    (function patchHostDescribe(obj) {
                         if (obj && typeof obj === 'object') {
                             for (const key of Object.keys(obj)) {
                                 if (key === 'hostname' && typeof obj[key] === 'string') {
                                     obj[key] = '127.0.0.1';
-                                    patched = true;
+                                    patched.push('hostname');
+                                } else if (key === 'home' && typeof obj[key] === 'string') {
+                                    obj[key] = '/data/dsh';
+                                    patched.push('home');
                                 } else {
-                                    patchHostname(obj[key]);
+                                    patchHostDescribe(obj[key]);
                                 }
                             }
                         }
                     })(data);
                     body = JSON.stringify(data);
-                    if (patched) {
-                        log('[HTTP-' + reqId + ']', 'host.describe patched: hostname -> 127.0.0.1');
+                    if (patched.length > 0) {
+                        log('[HTTP-' + reqId + ']', 'host.describe patched: ' + patched.join(', ') + ' -> 127.0.0.1, /data/dsh');
                     } else {
-                        log('[HTTP-' + reqId + ']', 'WARNING: host.describe response had no hostname field to patch. ' +
+                        log('[HTTP-' + reqId + ']', 'WARNING: host.describe response had no fields to patch. ' +
                             'DSH may have changed the response structure upstream.');
                     }
                 } catch(e) {
