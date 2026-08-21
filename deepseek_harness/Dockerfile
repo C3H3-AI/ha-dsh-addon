@@ -42,10 +42,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /data/dsh
 
-# 安装 @deepseek-ai/dsh（使用官方 registry，npmmirror 镜像落后一个版本）
-# npmjs.org 有 rc.7，npmmirror 只有 rc.6（rc.7 修复了模块表不匹配问题）
-# 若官方 registry 超时，可回退到 npmmirror（但需注意版本滞后）
-RUN npm install -g @deepseek-ai/dsh@0.1.0-rc.7 \
+# 安装 pnpm（用于 DSH 插件管理，dsh plugin CLI 依赖 pnpm）
+# 国内网络使用 npmmirror 镜像源加速
+RUN npm install -g pnpm \
+    && pnpm config --global set registry https://registry.npmmirror.com
+
+# 安装 @deepseek-ai/dsh（使用 @next = rc.8，避免 rc.7 的 bundle 结构问题）
+# latest tag (rc.7) 的 dsh-client-connection 在 rc.8 子包中被拆分为 client/host 两个入口，
+# 但 rc.7 的 web-app bundle 缺少对应的 HostConnectionService 注入行，导致 ctx.connection 不存在，
+# 已安装的插件（如 dsh-im）的服务端路由无法注册，返回 404。
+# @next (rc.8) 已修复此问题，正确注入 connection 服务。
+# 用户可通过 Web UI 一键更新按钮随时切换到 latest 或更新版本。
+RUN npm install -g @deepseek-ai/dsh@next \
     && ln -sf /usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js /usr/local/bin/dsh \
     && rm -f /usr/local/lib/node_modules/.package-lock.json 2>/dev/null
 

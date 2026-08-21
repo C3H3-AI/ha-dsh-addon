@@ -18,10 +18,11 @@
 | 属性 | 值 |
 |------|-----|
 | Addon 版本 | `0.2.16`（配套集成 `deepseek_harness` 为 `0.2.0`） |
-| DSH 依赖 | `@deepseek-ai/dsh`（npm，latest=rc.7 / next=rc.8） |
+| DSH 依赖 | `@deepseek-ai/dsh@next`（rc.8，Dockerfile 固定版本，用户可通过一键更新升级） |
 | Bridge API 鉴权 | 共享密钥 `api_token`（`Bearer`，写操作必带，fail-closed） |
 | Web UI 端口 | Ingress 3080（对外）→ DSH 127.0.0.1:3081（内部） |
 | 桥接 API 端口 | 3082 |
+| 插件管理 | `pnpm` + `dsh plugin` CLI + 桥接 API 插件端点 + 浏览器 UI 按钮 |
 | 架构 | aarch64 / amd64 |
 
 ---
@@ -39,11 +40,25 @@
 │                   │      │ WebSocket (upgrade)              │
 │                   ▼      │                                 │
 │   [桥接 API 0.0.0.0:3082]──► DSH headless（单轮 one-shot）     │
-│       ├ GET  /api/status     (只读,放行)                       │
-│       ├ POST /api/chat       (需 Bearer token)                │
-│       ├ POST /api/restart    (需 Bearer token)                │
-│       └ GET  /api/update/status   (需 Bearer token)           │
-│         POST /api/update          (需 Bearer token, 一键更新) │
+│       ├ GET  /api/status          (只读,放行)                    │
+│       ├ POST /api/chat            (需 Bearer token)             │
+│       ├ POST /api/restart         (需 Bearer token)             │
+│       ├ GET  /api/update/status   (需 Bearer token)             │
+│       ├ POST /api/update          (需 Bearer token, 一键更新)   │
+│       ├ GET  /api/plugin/list     (只读,放行)                    │
+│       ├ POST /api/plugin/install  (需 Bearer token, 插件安装)   │
+│       └ POST /api/plugin/uninstall(需 Bearer token, 插件卸载)   │
+│                                                              │
+│                          ┌──────────────────────┐             │
+│                          │  HTTP 代理 0.0.0.0:3080 │             │
+│                          │  ┌──────────────────┐ │             │
+│                          │  │ /__dsh_update*  →│ │             │
+│                          │  │   bridge API     │ │             │
+│                          │  ├──────────────────┤ │             │
+│                          │  │ /__dsh_plugin*  →│ │             │
+│                          │  │   bridge API     │ │             │
+│                          │  └──────────────────┘ │             │
+│                          └──────────┬───────────┘             │
 │                                                              │
 │   持久化目录 /data/dsh/                                       │
 │     ├ settings.yaml          (模型/提供商配置)                 │
@@ -54,13 +69,14 @@
 └──────────────────────────────────────────────────────────────┘
 ```
 
-### 2.1 三个组件
+### 2.1 四个组件
 
 | 组件 | 文件 | 职责 |
 |------|------|------|
 | 启动脚本 | `run.sh` | 读配置、生成 DSH 配置、启动 DSH + 注入生产代理 |
-| HTTP/WS 代理 | `deepseek_harness/proxy.js`（独立文件，Dockerfile `COPY` 至 `/proxy.js`，run.sh 以 `node /proxy.js` 启动）| 处理 Ingress 前缀、重写 HTML/JS、改写 API 响应 |
-| 桥接 API | `api_server.js` | 面向 HA 自定义集成的稳定契约 |
+| HTTP/WS 代理 | `deepseek_harness/proxy.js`（独立文件，Dockerfile `COPY` 至 `/proxy.js`，run.sh 以 `node /proxy.js` 启动）| 处理 Ingress 前缀、重写 HTML/JS、改写 API 响应、中转更新/插件管理请求 |
+| 桥接 API | `api_server.js` | 面向 HA 自定义集成的稳定契约 + 一键更新 + 插件管理 |
+| 插件管理 | proxy.js（浏览器 UI） + api_server.js（管理 API） | 浏览器侧安装/卸载 DSH 插件（转发 `dsh plugin` CLI） |
 
 ---
 
@@ -219,9 +235,9 @@ addon 壳与配套集成 `deepseek_harness` 采用**独立版本轨道**（见 �
 - 已发布的 Release 提交信息错误时，**不要 force-push 重写 tag**，而应递增 minor 版本（如 0.2.13 → 0.2.14），否则破坏 HACS 用户缓存。
 
 ### 8.4 DSH 升级的现状
-- Dockerfile 用 `npm install -g @deepseek-ai/dsh` → 装 `latest`（当前 rc.7）。
-- rc.8 在 npm `next` tag → **HA 商店"更新"拿不到 rc.8**。
-- 且 DSH 在镜像只读层，`npm update -g` 会破坏包 → 需要新增"Web 一键更新"方案（见 §9）。
+- Dockerfile 用 `npm install -g @deepseek-ai/dsh@next` → 装 rc.8（当前 `next` tag）。
+- 用户可通过 Web UI 一键更新按钮随时切换到 `latest` 或 `next` 通道。
+- DSH 在镜像只读层，`npm update -g` 会破坏包 → 需要"Web 一键更新"方案（见 §9）。
 - **设计动机**：DSH 更新快（测试期），若每次上游发 rc 都要维护者重新构建 addon 镜像，成本不可接受。正确姿势是 addon 壳稳定、DSH 本体由用户按需一键更新到上游（见 §9.0 更新边界原则）。
 
 ### 8.5 DSH 会话能力的关键事实（影响架构决策）
@@ -289,6 +305,68 @@ addon 壳与配套集成 `deepseek_harness` 采用**独立版本轨道**（见 �
 - **写标记 + 重启整个 addon 容器**（原子、稳），避免进程级热更造成脏状态。
 - API 内已有 `handleRestart`（走 `/addons/{slug}/restart`），可复用。
 
+### 9.8 插件管理实现
+
+插件管理将 DSH 的 `dsh plugin` CLI 包装为 HTTP API，通过 proxy 注入的 UI 按钮在浏览器中直接操作。
+
+#### 架构
+
+```
+[浏览器] 绿色「插件」按钮 → /__dsh_plugin/plugin/list|install|uninstall
+   ▼ (proxy 注入 Bearer token)
+[HTTP 代理 0.0.0.0:3080] → /api/plugin/* → 桥接 API
+   ▼
+[桥接 API] → spawn('node', [DSH_BIN, 'plugin', '--profile', 'web', ...])
+   ▼
+[dsh plugin CLI] → spawnSync('pnpm', [...], { cwd: $DSH_HOME/profiles/web })
+   ▼
+[pnpm] → 安装到 profile node_modules → reconcile bundles
+```
+
+#### 桥接 API 端点
+
+| 端点 | 方法 | 鉴权 | 功能 |
+|------|------|------|------|
+| `/api/plugin/list` | GET | 免鉴权（只读） | 读取 `$DSH_HOME/profiles/web/package.json` 返回已安装插件列表 |
+| `/api/plugin/install` | POST | Bearer token | 转发 `dsh plugin --profile web add <pkg>`，安装后需重启容器生效 |
+| `/api/plugin/uninstall` | POST | Bearer token | 转发 `dsh plugin --profile web remove <pkg>`，卸载后需重启容器生效 |
+
+#### HTTP 代理插件管理 relay
+
+- URL 模式：`/__dsh_plugin/*` → 桥接 API `/api/plugin/*`
+- 安全约束：与更新 relay 相同，仅允许 Ingress 来源（`x-ingress-path` 头部必须存在）防止容器内未授权访问
+- token 注入：proxy 自动注入 `Authorization: Bearer <token>`，浏览器端无需持有密钥
+
+#### 前提条件
+
+- pnpm 必须在容器 PATH 中（Dockerfile 已安装 `npm install -g pnpm`）
+- pnpm 配置国内镜像源（`pnpm config --global set registry https://registry.npmmirror.com`）
+- 插件安装过程较慢（pnpm 下载依赖），API 超时设置为 120 秒
+
+#### 浏览器 UI
+
+- 浮动绿色「插件」按钮（位于一键更新按钮上方，`right:16px; bottom:56px`）
+- 点击展开面板，显示已安装插件列表（每项带删除按钮）
+- 输入框支持回车键快速安装
+- 面板底部提示"安装/卸载后需重启容器生效"
+- 安全：删除操作有 `confirm()` 确认对话框
+
+#### 与 DSH 内置插件市场的关系
+
+- 本方案是**独立于** DSH Web UI 原生插件市场的另一套入口
+- 原生插件市场是否可用取决于 DSH 后端是否在进程内直接调用 `dsh plugin` CLI（需 pnpm 在 PATH 中）
+- 两套方案共用同一套 profile 目录和 pnpm 配置，安装结果互通
+
+#### 改动点
+
+| 文件 | 改动 |
+|------|------|
+| `Dockerfile` | 新增 `npm install -g pnpm` + `pnpm config --global set registry ...` |
+| `Dockerfile` | DSH 版本从 `@0.1.0-rc.7` 改为 `@next`（rc.8，修复 bundle 结构问题） |
+| `api_server.js` | 新增 `runPluginCommand()` + `handlePluginInstall/uninstall/list()` |
+| `proxy.js` | 新增 `/__dsh_plugin*` relay（与更新 relay 同模式） |
+| `proxy.js` | 新增 `pluginUiScript`（浮动按钮 + 面板 + 安装/卸载逻辑） |
+
 ---
 
 ## 10. 已修复的问题 — build.yaml 与 Dockerfile 对齐
@@ -308,7 +386,8 @@ addon 壳与配套集成 `deepseek_harness` 采用**独立版本轨道**（见 �
 | 文件 | 用途 |
 |------|------|
 | `tests/mock_dsh.js` | 模拟 DSH headless 进程（stdout 输出 `{text:...}`），供桥接 API 调用 |
-| `tests/test_bridge_api.js` | 验证 `/api/chat\|status\|restart\|update*` 的鉴权（常量时间比较 + 未配 token 即 401 fail-closed）、单飞并发锁、60s 超时、update 双重闸等行为 |
+| `tests/test_bridge_api.js` | 验证 19 项契约用例：`/api/chat\|status\|restart\|update*` 的鉴权（常量时间比较 + 未配 token 即 401 fail-closed）、单飞并发锁、60s 超时、update 双重闸 |
+| 插件管理端点（手动验证） | `GET /api/plugin/list`（免鉴权 200 + 空列表）、`POST /api/plugin/install\|uninstall`（无 token 401、缺 package 400、带 token 时 mock CLI 返回 502/200）|
 
 > 调试期的临时脚本（`test_api*.js` / `test_proxy*.js` / `debug/*`）仍在 `.scratch/`（gitignore），不进入仓库；正式回归走 `tests/`。
 

@@ -10,7 +10,9 @@
  * 4. Rewrites /api/host.describe to return hostname=127.0.0.1.
  * 5. Relays /__dsh_update* endpoints to the bridge API, injecting the
  *    shared token so browser-side code never holds it.
- * 6. Proxies WebSocket upgrade requests with Host/Origin header override.
+ * 6. Relays /__dsh_plugin* endpoints to the bridge API for plugin
+ *    management (install / uninstall / list).
+ * 7. Proxies WebSocket upgrade requests with Host/Origin header override.
  *
  * Environment variables:
  *   DSH_API_PORT   — bridge API port (default 3082)
@@ -90,6 +92,40 @@ const server = http.createServer((req, res) => {
             if (res.headersSent) return;
             res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({ ok: false, error: 'bridge relay failed: ' + e.message }));
+        });
+        req.pipe(b);
+        return;
+    }
+
+    // 插件管理端点：/__dsh_plugin* -> bridge API :3082（与更新端点同模式，注入 token 转给浏览器）
+    if (targetPath.indexOf('/__dsh_plugin') === 0) {
+        if (!ingressPath) {
+            log('[HTTP-' + reqId + ']', 'plugin denied: no x-ingress-path (non-ingress source)');
+            res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ ok: false, error: 'forbidden: plugin endpoint is ingress-only' }));
+            return;
+        }
+        const bridgePath = '/api' + targetPath.slice('/__dsh_plugin'.length);
+        const headers = Object.assign({}, req.headers);
+        delete headers['host'];
+        delete headers['origin'];
+        delete headers['x-ingress-path'];
+        if (BRIDGE_TOKEN) headers['Authorization'] = 'Bearer ' + BRIDGE_TOKEN;
+        const b = http.request({
+            hostname: '127.0.0.1',
+            port: BRIDGE_PORT,
+            path: bridgePath,
+            method: req.method,
+            headers: headers
+        }, (bres) => {
+            log('[HTTP-' + reqId + ']', 'plugin relay:', req.method, bridgePath, '->', bres.statusCode);
+            res.writeHead(bres.statusCode, { 'Content-Type': 'application/json; charset=utf-8' });
+            bres.pipe(res);
+        });
+        b.on('error', (e) => {
+            if (res.headersSent) return;
+            res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ ok: false, error: 'plugin relay failed: ' + e.message }));
         });
         req.pipe(b);
         return;
@@ -453,8 +489,111 @@ const server = http.createServer((req, res) => {
                     '</script>'
                 ].join('\n');
 
+                // ===== 插件管理 UI（DESIGN.md §8 扩展）=====
+                // 浮动按钮 + 面板，用于在浏览器中直接安装/卸载 DSH 插件。
+                // 调用 /__dsh_plugin/plugin/* 由 HTTP 代理中转注入 token。
+                // 安装/卸载后需要重启容器才能生效（插件通过 cordis 加载）。
+                const pluginUiScript = [
+                    '<style>',
+                    '#dsh-plugin-btn { position:fixed; right:16px; bottom:56px; z-index:99999; ',
+                    '  background:#2e7d32; color:#fff; border:none; border-radius:20px; padding:8px 14px;',
+                    '  font-size:13px; cursor:pointer; box-shadow:0 2px 8px rgba(0,0,0,.25); display:flex; align-items:center; gap:4px; }',
+                    '#dsh-plugin-btn:hover { background:#1b5e20; }',
+                    '#dsh-plugin-panel { position:fixed; right:16px; bottom:104px; z-index:99999; ',
+                    '  background:rgba(20,20,20,.92); color:#fff; padding:12px; border-radius:8px;',
+                    '  font-size:12px; max-width:320px; min-width:240px; display:none; }',
+                    '#dsh-plugin-panel h3 { margin:0 0 8px 0; font-size:14px; }',
+                    '#dsh-plugin-panel .plugin-item { display:flex; justify-content:space-between; align-items:center; padding:4px 0; border-bottom:1px solid rgba(255,255,255,.1); }',
+                    '#dsh-plugin-panel .plugin-item:last-child { border-bottom:none; }',
+                    '#dsh-plugin-panel .plugin-name { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }',
+                    '#dsh-plugin-panel .plugin-del { background:#c62828; color:#fff; border:none; border-radius:4px; padding:2px 8px; font-size:11px; cursor:pointer; }',
+                    '#dsh-plugin-panel .plugin-del:hover { background:#b71c1c; }',
+                    '#dsh-plugin-panel .plugin-install-area { display:flex; gap:4px; margin-top:8px; }',
+                    '#dsh-plugin-panel .plugin-install-area input { flex:1; padding:4px 8px; border-radius:4px; border:1px solid #555; background:#333; color:#fff; font-size:12px; }',
+                    '#dsh-plugin-panel .plugin-install-area button { background:#185fa5; color:#fff; border:none; border-radius:4px; padding:4px 12px; font-size:12px; cursor:pointer; }',
+                    '#dsh-plugin-panel .plugin-install-area button:hover { background:#0c447c; }',
+                    '#dsh-plugin-panel .plugin-install-area button:disabled { opacity:0.5; cursor:not-allowed; }',
+                    '#dsh-plugin-panel .plugin-msg { margin-top:6px; font-size:11px; color:#ff9800; }',
+                    '#dsh-plugin-panel .plugin-msg.ok { color:#4caf50; }',
+                    '#dsh-plugin-panel .plugin-msg.err { color:#e24b4a; }',
+                    '#dsh-plugin-panel .plugin-empty { color:#9e9e9e; font-style:italic; }',
+                    '#dsh-plugin-panel .plugin-refresh { background:transparent; color:#90caf9; border:1px solid #90caf9; border-radius:4px; padding:2px 8px; font-size:11px; cursor:pointer; float:right; }',
+                    '#dsh-plugin-panel .plugin-badge { display:inline-block; background:#555; border-radius:3px; padding:1px 5px; font-size:10px; margin-left:4px; }',
+                    '</style>',
+                    '<button id="dsh-plugin-btn">插件</button>',
+                    '<div id="dsh-plugin-panel">',
+                    '  <h3>已安装插件 <span class="plugin-badge" id="dsh-plugin-count">0</span></h3>',
+                    '  <div id="dsh-plugin-list"></div>',
+                    '  <div class="plugin-install-area">',
+                    '    <input id="dsh-plugin-input" placeholder="输入包名...">',
+                    '    <button id="dsh-plugin-install-btn">安装</button>',
+                    '  </div>',
+                    '  <div id="dsh-plugin-msg"></div>',
+                    '  <div style="font-size:10px; color:#777; margin-top:6px;">安装/卸载后需重启容器生效</div>',
+                    '</div>',
+                    '<script>',
+                    '(function(){',
+                    '  var BASE = "' + ingressPath + '";',
+                    '  var btn = document.getElementById("dsh-plugin-btn");',
+                    '  var panel = document.getElementById("dsh-plugin-panel");',
+                    '  var list = document.getElementById("dsh-plugin-list");',
+                    '  var countEl = document.getElementById("dsh-plugin-count");',
+                    '  var input = document.getElementById("dsh-plugin-input");',
+                    '  var installBtn = document.getElementById("dsh-plugin-install-btn");',
+                    '  var msg = document.getElementById("dsh-plugin-msg");',
+                    '  function api(path, opts) {',
+                    '    var url = BASE + path;',
+                    '    return fetch(url, Object.assign({ headers: { "Content-Type": "application/json" } }, opts || {}));',
+                    '  }',
+                    '  function showMsg(text, type) { msg.textContent = text; msg.className = "plugin-msg" + (type ? " " + type : ""); }',
+                    '  function loadPlugins() {',
+                    '    api("/__dsh_plugin/plugin/list").then(function(r) { return r.json(); }).then(function(d) {',
+                    '      if (!d.ok) { showMsg("加载失败: " + (d.error || "unknown"), "err"); return; }',
+                    '      list.innerHTML = "";',
+                    '      countEl.textContent = d.count || 0;',
+                    '      if (d.plugins && d.plugins.length > 0) {',
+                    '        d.plugins.forEach(function(p) {',
+                    '          var item = document.createElement("div");',
+                    '          item.className = "plugin-item";',
+                    "          item.innerHTML = '<span class=\"plugin-name\">' + p + '</span>' +",
+                    "            '<button class=\"plugin-del\" data-pkg=\"' + p + '\">\u5220\u9664</button>';",
+                    '          item.querySelector(".plugin-del").addEventListener("click", function() {',
+                    "            if (!confirm('\u786e\u8ba4\u5378\u8f7d ' + p + ' \uff1f')) return;",
+                    "            showMsg('\u6b63\u5728\u5378\u8f7d ' + p + ' ...');",
+                    '            api("/__dsh_plugin/plugin/uninstall", { method: "POST", body: JSON.stringify({ package: p }) }).then(function(r) { return r.json(); }).then(function(d) {',
+                    '              if (d.ok) { showMsg("\u5378\u8f7d\u6210\u529f", "ok"); loadPlugins(); }',
+                    '              else { showMsg("\u5378\u8f7d\u5931\u8d25: " + (d.error || "unknown"), "err"); }',
+                    '            }).catch(function(e) { showMsg("\u8bf7\u6c42\u5931\u8d25: " + e.message, "err"); });',
+                    '          });',
+                    '          list.appendChild(item);',
+                    '        });',
+                    '      } else {',
+                    "        list.innerHTML = '<div class=\"plugin-empty\">\u6682\u65e0\u5df2\u5b89\u88c5\u7684\u63d2\u4ef6</div>';",
+                    '      }',
+                    '    }).catch(function(e) { showMsg("\u52a0\u8f7d\u5931\u8d25: " + e.message, "err"); });',
+                    '  }',
+                    '  btn.addEventListener("click", function() {',
+                    '    var isVisible = panel.style.display !== "none";',
+                    '    panel.style.display = isVisible ? "none" : "block";',
+                    '    if (!isVisible) loadPlugins();',
+                    '  });',
+                    '  installBtn.addEventListener("click", function() {',
+                    '    var pkg = input.value.trim();',
+                    '    if (!pkg) { showMsg("\u8bf7\u8f93\u5165\u5305\u540d", "err"); return; }',
+                    "    showMsg('\u6b63\u5728\u5b89\u88c5 ' + pkg + ' ...');",
+                    '    installBtn.disabled = true;',
+                    '    api("/__dsh_plugin/plugin/install", { method: "POST", body: JSON.stringify({ package: pkg }) }).then(function(r) { return r.json(); }).then(function(d) {',
+                    '      if (d.ok) { showMsg("\u5b89\u88c5\u6210\u529f", "ok"); input.value = ""; loadPlugins(); }',
+                    '      else { showMsg("\u5b89\u88c5\u5931\u8d25: " + (d.error || "unknown"), "err"); }',
+                    '    }).catch(function(e) { showMsg("\u8bf7\u6c42\u5931\u8d25: " + e.message, "err"); }).finally(function() { installBtn.disabled = false; });',
+                    '  });',
+                    '  input.addEventListener("keydown", function(e) { if (e.key === "Enter") installBtn.click(); });',
+                    '})();',
+                    '</script>'
+                ].join('\n');
+
                 const baseTag = '<base href="' + baseHref + '">\n';
-                body = body.replace('<head>', '<head>' + baseTag + mobileCss + loopbackFixScript + cryptoPolyfillScript + ingressFixScript + storageDiagScript + updateUiScript);
+                body = body.replace('<head>', '<head>' + baseTag + mobileCss + loopbackFixScript + cryptoPolyfillScript + ingressFixScript + storageDiagScript + updateUiScript + pluginUiScript);
 
                 const headers = cleanHeaders(proxyRes.headers);
                 headers['content-length'] = Buffer.byteLength(body, 'utf-8');

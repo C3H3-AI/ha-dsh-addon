@@ -32,6 +32,7 @@
 - **桥接 API**：供配套 HA 集成 `deepseek_harness` 调用的稳定 HTTP 契约。
 - **HA 设备控制（可选）**：DSH 通过 HA 原生 MCP Server 读 / 控设备。
 - **Web 一键更新**：用户在 DSH Web 界面内即可把 DSH 升级到上游最新 rc，无需维护者重发 addon。
+- **插件管理**：用户在浏览器内可直接安装/卸载 DSH 插件（通过 `dsh plugin` CLI + pnpm）。
 
 仓库由**两个独立发布轨道**组成：
 
@@ -64,7 +65,14 @@
 │       ├ POST /api/restart         (需 Bearer)              │
 │       ├ GET  /api/update/status   (需 Bearer)              │
 │       ├ POST /api/update          (需 Bearer, 一键更新)     │
-│       └ GET  /api/update/result   (需 Bearer, 前端轮询)     │
+│       ├ GET  /api/update/result   (需 Bearer, 前端轮询)     │
+│       ├ GET  /api/plugin/list     (只读, 免鉴权)            │
+│       ├ POST /api/plugin/install  (需 Bearer, 插件安装)     │
+│       └ POST /api/plugin/uninstall(需 Bearer, 插件卸载)     │
+│                                                            │
+│   [HTTP 代理 0.0.0.0:3080] 内部 relay:                      │
+│       ├ /__dsh_update/*  → bridge API（注入 token）         │
+│       └ /__dsh_plugin/*  → bridge API（注入 token）         │
 │                                                            │
 │   持久化目录 /data/dsh/（Supervisor 保证更新时保留）           │
 │     ├ settings.yaml     （模型/提供商配置）                  │
@@ -74,15 +82,17 @@
 └────────────────────────────────────────────────────────────┘
 ```
 
-### 2.2 三个运行进程（由 run.sh 拉起）
+### 2.2 三个运行进程 + 插件管理（由 run.sh 拉起）
 
 启动脚本 `run.sh` 同时拉起 3 个进程，均作为子进程前台运行：
 
 | 进程 | 命令 | 监听端口 | 职责 |
 |------|------|---------|------|
 | **DSH Web** | `node --expose-internals <DSH_BIN> --profile web --host 127.0.0.1 --port 3081` | 127.0.0.1:3081 | DSH 本体，只回环监听 |
-| **HTTP 代理** | `node /proxy.js` | 0.0.0.0:3080 | Ingress 接入 + 内容改写 + WS 转发 |
-| **桥接 API** | `node /api_server.js` | 0.0.0.0:3082 | 对集成暴露稳定契约 |
+| **HTTP 代理** | `node /proxy.js` | 0.0.0.0:3080 | Ingress 接入 + 内容改写 + WS 转发 + 更新/插件管理 relay |
+| **桥接 API** | `node /api_server.js` | 0.0.0.0:3082 | 对集成暴露稳定契约 + 一键更新 + 插件管理端点 |
+
+> 插件管理可通过桥接 API 的 `dsh plugin` CLI 调用 pnpm 安装卸载，也可通过 proxy 注入的浏览器 UI 直接操作。
 
 > **为何 DSH 只监听回环？** DSH 自带安全限制禁止绑定 `0.0.0.0`（避免把远程代码执行能力暴露到网络），因此对外统一交给代理接管。
 
@@ -199,6 +209,7 @@ ha-dsh-addon/
 | 诊断端点 | `url === '/__proxy_diag'` | 返回 JSON（状态/端口/ingress/remote），独立验证代理可用 |
 | 目标路径剥离 | 始终 | 先去掉 `X-Ingress-Path` 前缀，后续判断基于 `targetPath` |
 | 一键更新中转 | `targetPath` 以 `/__dsh_update` 开头 | 仅允许带 `x-ingress-path`（ingress 来源），否则 403；转 `:3082` 的 `/api` + 剥离后缀，并注入 `Authorization: Bearer`（浏览器不持 token） |
+| 插件管理中转 | `targetPath` 以 `/__dsh_plugin` 开头 | 与更新中转同模式，转 `:3082` 的 `/api/plugin/*`，注入 token，仅限 ingress 来源 |
 | 改写 dsh-client   | `pathOnly.endsWith('/plugins/@deepseek-ai/dsh-client-connection/client.js')` 且 JS | 精确正则把 `isLoopback: (...)` 替换为 `isLoopback: true`，兜底替换非 true 值；未命中输出 WARNING |
 | 改写 HTML | `content-type` 为 html 且有 ingress 前缀 | 注入 `<base href>`、移动端 CSS、loopback 修复脚本、crypto polyfill、ingress fetch/WebSocket patch、storage 诊断、一键更新 UI；重写 `src/href`、`"url":"/plugins/` 带前缀 |
 | 改写 host.describe | `pathOnly === '/api/host.describe'` 且 JSON | 递归把所有 `hostname` 字段改为 `127.0.0.1` |
@@ -230,6 +241,7 @@ ha-dsh-addon/
 5. `ingressFixScript`（重写 `fetch`/`WebSocket`，`/api/` → `ORIGIN+BASE+path`）
 6. `storageDiagScript`（`[storage]` 日志输出 localStorage 键/数据）
 7. `updateUiScript`（右下角浮动 DSH 更新按钮 + 设置页按钮 + MutationObserver）
+8. `pluginUiScript`（浮动绿色「插件」按钮 + 面板 + 安装/卸载列表 + 输入框）
 
 ---
 
@@ -252,6 +264,9 @@ ha-dsh-addon/
 | `POST /api/chat` | ✅ Bearer | 单飞锁 → `runHeadless(message)` → `{text}`；超时 60s；缺 message 400；并发 429 |
 | `POST /api/restart` | ✅ Bearer | 调 Supervisor `/addons/<slug>/restart`（需 `SUPERVISOR_TOKEN`） |
 | `POST /api/update` | ✅ Bearer | `{channel: latest\|next}`，后台 `npm install` 到 `vendor.tmp` → 原子改名 → 写 `.updated` 标记 → 触发容器重启，先回 202 |
+| `GET /api/plugin/list` | ❌ 免鉴权（只读） | 读取 `$DSH_HOME/profiles/web/package.json` 返回 `{plugins: [...], count: N}` |
+| `POST /api/plugin/install` | ✅ Bearer | `{package: "pkg-name"}`，后台 `spawn` 运行 `dsh plugin --profile web add <pkg>`，超时 120s |
+| `POST /api/plugin/uninstall` | ✅ Bearer | `{package: "pkg-name"}`，后台 `spawn` 运行 `dsh plugin --profile web remove <pkg>`，超时 120s |
 
 > 刷新规则：命中即匹配路由；只读三类端点免 token，其余（含未知路径）一律先过 `tokenMatches`，未通过返回 401（fail-closed）。
 
@@ -266,6 +281,8 @@ ha-dsh-addon/
 | `handleChat` / `handleStatus` / `handleRestart` | 对应路由处理器 |
 | `handleUpdate` / `runUpdate` / `handleUpdateStatus` / `handleUpdateResult` | 一键更新：后台安装、原子切换、状态机（`updateInFlight` 锁 + `updateResult` 状态） |
 | `currentDshVersion()` | 读取 DSH 的 package.json 版本 |
+| `runPluginCommand(args)` | `spawn(node ... plugin --profile web <args>)`，收集 stdout/stderr，超时 120s |
+| `handlePluginInstall` / `handlePluginUninstall` / `handlePluginList` | 插件管理：调用 `runPluginCommand` 转发给 `dsh plugin` CLI，对 `/api/plugin/*` 路由 |
 | `npmDistTags()` | `npm view @deepseek-ai/dsh dist-tags`（20s 超时，走 npmmirror） |
 | `triggerRestart()` | fire-and-forget 调 Supervisor 重启 |
 
@@ -351,7 +368,8 @@ handleUpdate (202 立即返回)
 
 - 基础镜像 `node:22-bookworm-slim`（经 `ARG BUILD_FROM` 由 build.yaml 注入；用 Debian 因 node-pty 需 glibc）。
 - 安装 `bash curl wget jq python3 build-essential`。
-- `npm install -g @deepseek-ai/dsh`（npmmirror 国内源），软链 `dsh`；该层为**只读层**，即"镜像内置版/离线兜底/回滚目标"。
+- 安装 `pnpm`（`npm install -g pnpm`），配置国内镜像源（`pnpm config --global set registry https://registry.npmmirror.com`），用于 DSH 插件管理。
+- `npm install -g @deepseek-ai/dsh@next`（npmmirror 国内源），软链 `dsh`；该层为**只读层**，即"镜像内置版/离线兜底/回滚目标"。
 - `COPY run.sh /run.sh`、`proxy.js /proxy.js`、`api_server.js /api_server.js`。
 - `HEALTHCHECK`：同时探 `3081` 与 `3082/api/status`，任一不可达视为不健康。
 - `CMD ["/run.sh"]`。
@@ -381,7 +399,8 @@ deepseek_harness                                  api_server.js
 
 | 依赖 | 用途 | 安装方式 |
 |------|------|---------|
-| `@deepseek-ai/dsh` | DSH 本体（`latest`=rc.7 / `next`=rc.8） | Dockerfile `npm install -g`；可被 vendor 覆盖 |
+| `@deepseek-ai/dsh@next` | DSH 本体（rc.8） | Dockerfile `npm install -g @next`；可被 vendor 覆盖 |
+| `pnpm` | DSH 插件管理（`dsh plugin` CLI 依赖） | Dockerfile `npm install -g pnpm` |
 | `jq` | 解析 `/data/options.json` | Dockerfile `apt-get` |
 | `python3` / `build-essential` | node-gyp 编译原生模块（node-pty） | Dockerfile `apt-get` |
 | node 22 | 运行 proxy.js / api_server.js / DSH | 基础镜像自带 |
@@ -451,7 +470,8 @@ bash scripts/check-versions.sh
 | 文件 | 说明 |
 |------|------|
 | `mock_dsh.js` | 模拟 `dsh --profile headless`：消息以 `slow:` 开头则延时返回，否则立刻回 `{text}` |
-| `test_bridge_api.js` | 以子进程拉起 api_server，断言约 11 组用例：状态、chat 的 401/错 token/正确/空消息、单飞锁 429、restart 401/500、update/status、常量时间 token 比较、未知端点 404 |
+| `test_bridge_api.js` | 以子进程拉起 api_server，断言 19 项契约用例：状态、chat 的 401/错 token/正确/空消息、单飞锁 429、restart 401/500、update/status、常量时间 token 比较、未知端点 404 |
+| 插件管理端点（手动验证） | `GET /api/plugin/list` 免鉴权 200 + 空列表；`POST /api/plugin/install\|uninstall` 无 token 401、缺 package 400、带 token 时 mock CLI 返回结果 |
 
 ### 11.2 CI（`.github/workflows/ci.yml`）四个任务
 
