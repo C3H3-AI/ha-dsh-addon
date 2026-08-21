@@ -244,7 +244,7 @@ const server = http.createServer((req, res) => {
                     '  function rewrite(url) {',
                     '    var path = typeof url === "string" ? url : (url && url.pathname) || "";',
                     '    if (path.startsWith(BASE)) return null;',
-                    '    if (path.indexOf("/api/") === 0) {',
+                    '    if (path.indexOf("/api/") === 0 || path.indexOf("/plugins/") === 0) {',
                     '      return ORIGIN + BASE + path;',
                     '    }',
                     '    return null;',
@@ -348,67 +348,6 @@ const server = http.createServer((req, res) => {
                     "      };",
                     "    }",
                     "  } catch(e) {}",
-                    '})();',
-                    '</script>'
-                ].join('\n');
-
-                const ingressFixScript = [
-                    '<script>',
-                    '(function(){',
-                    '  var BASE = "' + ingressPath + '";',
-                    '  if (!BASE) return;',
-                    '  var ORIGIN = window.location.origin;',
-                    '  function rewrite(url) {',
-                    '    var isStr = typeof url === "string";',
-                    '    var path = isStr ? url : (url && url.pathname) || "";',
-                    '    // 避免二次重写：URL 已包含 ingress 路径前缀则跳过',
-                    '    if (path.startsWith(BASE)) { return null; }',
-                    '    if (path.startsWith("/api/")) {',
-                    '      // 仅 URL 对象才有 query；字符串取空，否则 url.search 是 String.prototype.search 函数',
-                    '      var qs = isStr ? "" : (url && url.search) || "";',
-                    '      return ORIGIN + BASE + path + qs;',
-                    '    }',
-                    '    return null;',
-                    '  }',
-                    '  var origFetch = window.fetch;',
-                    '  window.fetch = function(url, opts) {',
-                    '    var rewritten = rewrite(url);',
-                    '    if (rewritten) { console.log("[ingress] fetch:", (url.pathname || url), "->", rewritten); url = rewritten; }',
-                    '    return origFetch.call(this, url, opts);',
-                    '  };',
-                    '  var OrigWS = window.WebSocket;',
-                    '  window.WebSocket = function(url, protocols) {',
-                    '    var rewritten = rewrite(url);',
-                    '    if (rewritten) { console.log("[ingress] WS:", (url.pathname || url), "->", rewritten); url = rewritten; }',
-                    '    return new OrigWS(url, protocols);',
-                    '  };',
-                    '})();',
-                    '</script>'
-                ].join('\n');
-
-                // ===== localStorage 诊断脚本 =====
-                // 检查 localStorage 状态，记录对话数据和会话数据的持久化情况
-                // 用户可在浏览器控制台查看日志以诊断问题
-                const storageDiagScript = [
-                    '<script>',
-                    '(function(){',
-                    '  var LS_WARN = function(msg) {',
-                    '    try { console.warn("[storage] " + msg); } catch(e) {}',
-                    '  };',
-                    '  try {',
-                    '    var avail = typeof localStorage !== "undefined";',
-                    '    LS_WARN("localStorage available: " + avail);',
-                    '    if (avail) {',
-                    '      var keys = Object.keys(localStorage);',
-                    '      LS_WARN("localStorage keys: " + JSON.stringify(keys));',
-                    '      var chatKey = keys.find(function(k) { return k.indexOf("dsh.conversation.chat") !== -1; });',
-                    '      var sessKey = keys.find(function(k) { return k.indexOf("dsh.sessions.current") !== -1; });',
-                    '      if (chatKey) { LS_WARN("chat data found: " + chatKey + " length=" + localStorage.getItem(chatKey).length); }',
-                    '      else { LS_WARN("WARNING: No chat data in localStorage!"); }',
-                    '      if (sessKey) { LS_WARN("session data found: " + sessKey + " value=" + localStorage.getItem(sessKey)); }',
-                    '      else { LS_WARN("WARNING: No session data in localStorage!"); }',
-                    '    }',
-                    '  } catch(e) { LS_WARN("ERROR: " + e.message); }',
                     '})();',
                     '</script>'
                 ].join('\n');
