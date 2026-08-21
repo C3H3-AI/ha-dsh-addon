@@ -313,6 +313,16 @@ for i in $(seq 1 30); do
     sleep 2
 done
 
+# ===== 关闭 DSH 设备配对（HA Ingress 下不需要 LAN 配对）=====
+# DSH rc.8 引入了 remote-web-ui 和设备配对功能，在 Ingress 环境下
+# DSH 认为连接来自远程设备，要求配对才能访问工作区数据。
+# 设置 requirePairingForLan=false 跳过配对检查。
+echo "[DSH Addon] Disabling DSH device pairing (requirePairingForLan=false)..."
+curl -s -X POST http://127.0.0.1:3081/api/settings.mutate \
+  -H "Content-Type: application/json" \
+  -d '{"type":"client-request","rpcId":"startup","method":"settings.mutate","payload":{"ns":"remote-web-ui","ops":[{"op":"set","path":[],"value":{"requirePairingForLan":false,"enabled":true}}]}}' \
+  > /dev/null 2>&1 || echo "[DSH Addon]   WARNING: failed to disable device pairing (DSH may not be ready yet)"
+
 # 启动 HTTP 代理（0.0.0.0:3080 -> 127.0.0.1:3081）
 # 便于 HA Ingress 和外部端口访问
 # 与 TCP 代理不同，HTTP 代理能检测 X-Ingress-Path 头部并注入 <base> 标签
