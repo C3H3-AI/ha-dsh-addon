@@ -528,11 +528,13 @@ const server = http.createServer((req, res) => {
                 res.end(body);
                 log('[HTTP-' + reqId + ']', 'HTML rewritten with base:', baseHref);
             });
-        } else if (pathOnly === '/api/host.describe' && contentType.includes('json')) {
-            // 拦截 host.describe API，将 hostname 改为 127.0.0.1
-            // DSH 通过 host.describe 返回的信息判断环境（如 isLoopback、home 目录）。
-            // 在 HA Ingress 下，DSH 返回的 hostname 是外部域名、home 是容器内 /root，
-            // 导致 DSH 前端显示错误的主目录。这里统一改写。
+        } else if ((pathOnly === '/api/host.describe' || pathOnly === '/api/host.listDirectory') && contentType.includes('json')) {
+            // 拦截 host.describe / host.listDirectory，统一改写：
+            // - hostname 改为 127.0.0.1（DSH 据此判断 isLoopback，用于持久化设置）
+            // - home 改为 /data/dsh（文件浏览器/新建工作区的默认根目录，
+            //   容器内 homedir() 返回 /root，导致前端主目录误显示为 /root）
+            // DSH 在 HA Ingress 下返回的 hostname 是外部域名、home 是容器内 /root，这里统一改写。
+            // isDirectoryPickerRequest: 记录当前是否为目录选择器，其响应含 entries/crumb。
             let body = '';
             proxyRes.on('data', (chunk) => { body += chunk.toString(); });
             proxyRes.on('end', () => {
@@ -557,10 +559,11 @@ const server = http.createServer((req, res) => {
                     })(data);
                     body = JSON.stringify(data);
                     if (patched.length > 0) {
-                        log('[HTTP-' + reqId + ']', 'host.describe patched: ' + patched.join(', ') + ' -> 127.0.0.1, /data/dsh');
+                        log('[HTTP-' + reqId + ']', 'host.' + (pathOnly === '/api/host.describe' ? 'describe' : 'listDirectory') +
+                            ' patched: ' + patched.join(', ') + ' -> 127.0.0.1, /data/dsh');
                     } else {
-                        log('[HTTP-' + reqId + ']', 'WARNING: host.describe response had no fields to patch. ' +
-                            'DSH may have changed the response structure upstream.');
+                        log('[HTTP-' + reqId + ']', 'WARNING: host.' + (pathOnly === '/api/host.describe' ? 'describe' : 'listDirectory') +
+                            ' response had no fields to patch. DSH may have changed the response structure upstream.');
                     }
                 } catch(e) {
                     log('[HTTP-' + reqId + ']', 'host.describe patch error:', e.message);

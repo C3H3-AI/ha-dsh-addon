@@ -143,8 +143,17 @@ else
     echo "[DSH Addon]   Workspace: /data/dsh/workspace (DSH 工作区)"
 fi
 
+# 设置 HOME=/data/dsh：node os.homedir() 读取 HOME 环境变量。
+# 容器默认 HOME=/root，导致 DSH 的"主目录"（host.describe.home、
+# host.listDirectory 默认路径、新建工作区默认文件夹）全部指向 /root，
+# 且 /root 在容器重建后丢失数据。统一指向持久化的 /data/dsh。
+export HOME="/data/dsh"
+
 # 创建 DSH 数据目录
 mkdir -p "${DSH_HOME}"
+# 确保工作区目录存在（run.sh 后续会 cd 到 DSH_WORKSPACE 再启动 DSH，
+# 目录不存在会导致 cd 静默失败、DSH 从容器根目录启动，主工作区落在 / root 下）
+mkdir -p "${DSH_WORKSPACE}"
 
 # ===== 清理 DSH 运行时锁文件（异常退出后残留，导致启动失败）=====
 # task-board 的 ledger lock 在 DSH 异常退出后不会自动清理，
