@@ -311,6 +311,20 @@ if [ -d "${DSH_HOME}/profiles/web" ]; then
     fi
 fi
 
+# ===== 默认安装 dsh-market 插件市场（https://github.com/dsh-market/dsh-market）=====
+# 首次启动自动安装 DSH 官方插件市场，使用户可在 Web UI 的
+# Settings → Plugin Market 浏览/搜索/一键安装社区插件。
+# 仅在未安装时执行一次；无关注册表、缓存失败或网络异常时本次跳过，下次启动重试。
+# 注意：--config.minimumReleaseAge=0 用于绕过 pnpm 11+ 对 24h 内新版本的上架延迟限制。
+DSH_MARKET_DIR="${DSH_HOME}/profiles/web/node_modules/dshmarket"
+if [ ! -d "${DSH_MARKET_DIR}" ]; then
+    echo "[DSH Addon] dsh-market not installed -> default-installing (one-time)..."
+    node --expose-internals "${DSH_BIN}" plugin --profile web add dshmarket --config.minimumReleaseAge=0 2>&1 \
+        || echo "[DSH Addon]   WARNING: dsh-market install failed (check network/registry), will retry next start"
+else
+    echo "[DSH Addon] dsh-market already installed (skipped)"
+fi
+
 # 注意：DSH 安全限制，不允许绑定 0.0.0.0（安全原因：会暴露远程代码执行到网络）
 # 因此策略是：DSH 监听 127.0.0.1:3081，再启动 Node.js TCP 代理监听 0.0.0.0:3080 转发到 127.0.0.1:3081
 # 重要：DSH 和代理必须使用不同端口，因为 0.0.0.0:3080 包含 127.0.0.1，直接绑定会冲突（EADDRINUSE）
