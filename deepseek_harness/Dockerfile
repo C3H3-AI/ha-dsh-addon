@@ -77,6 +77,10 @@ COPY proxy.js /proxy.js
 COPY api_server.js /api_server.js
 RUN chmod a+x /run.sh
 
+# 拷贝 HA 自定义集成（custom_components）
+# 容器启动时 run.sh 会复制到 /config/custom_components/，实现 addon 自带集成
+COPY custom_components/ /custom_components/
+
 # 健康检查：同时探 DSH web (3081) 与 bridge API (3082)
 # 区分"web 挂"与"bridge 挂"：任一不可达都视为不健康，触发 Supervisor 重建
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
