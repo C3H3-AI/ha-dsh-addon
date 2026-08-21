@@ -300,6 +300,17 @@ fi
 # 上游更新后需要重新构建 Docker 镜像来更新 DSH
 echo "[DSH Addon] DSH version: $(node -e "console.log(require('${DSH_BIN%bin.js}../package.json').version || 'unknown')" 2>/dev/null || echo 'unknown')"
 
+# ===== 检查并修复 DSH profile 完整性 =====
+# 异常退出可能导致 profile 缺少关键包（如 @linxin666/dsh-web-ui-all），
+# DSH 启动时报 "cannot resolve profile bundle"。用 dsh plugin 命令重新安装。
+if [ -d "${DSH_HOME}/profiles/web" ]; then
+    PROFILE_BUNDLE="${DSH_HOME}/profiles/web/node_modules/@linxin666/dsh-web-ui-all"
+    if [ ! -d "${PROFILE_BUNDLE}" ]; then
+        echo "[DSH Addon] WARNING: profile bundle @linxin666/dsh-web-ui-all missing, reinstalling..."
+        node --expose-internals "${DSH_BIN}" plugin --profile web install 2>&1 || echo "[DSH Addon]   WARNING: profile reinstall failed (may be incomplete)"
+    fi
+fi
+
 # 注意：DSH 安全限制，不允许绑定 0.0.0.0（安全原因：会暴露远程代码执行到网络）
 # 因此策略是：DSH 监听 127.0.0.1:3081，再启动 Node.js TCP 代理监听 0.0.0.0:3080 转发到 127.0.0.1:3081
 # 重要：DSH 和代理必须使用不同端口，因为 0.0.0.0:3080 包含 127.0.0.1，直接绑定会冲突（EADDRINUSE）
