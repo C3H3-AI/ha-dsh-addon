@@ -150,7 +150,7 @@ mkdir -p "${DSH_HOME}"
 # task-board 的 ledger lock 在 DSH 异常退出后不会自动清理，
 # 下次启动时报 "task-board ledger is already owned by process XXX"。
 # 直接删除所有 lock 文件，DSH 正常启动时会重新创建。
-find "${DSH_HOME}" -name '*.lock' -o -name 'ledger-v2.lock' 2>/dev/null | while read lockfile; do
+find "${DSH_HOME}" \( -name '*.lock' -o -name 'ledger-v2.lock' \) 2>/dev/null | while read lockfile; do
     echo "[DSH Addon]   Cleaning stale lock: ${lockfile}"
     rm -f "${lockfile}"
 done
