@@ -389,8 +389,8 @@ const server = http.createServer((req, res) => {
 
                 // ===== 一键更新按钮（DESIGN.md §8）=====
                 // 浮动按钮始终显示（显示当前版本），调用 /__dsh_update* 由 HTTP 代理中转。
-                // 同时通过 MutationObserver 注入到 DSH 设置页面中的按钮区域。
                 // 流程：检查更新(GET status) -> 一键更新(POST) -> 轮询 result -> 容器重启。
+                // 注意：不使用 MutationObserver（监控整个 DOM 树会导致 SPA 应用卡死）。
                 const updateUiScript = [
                     '<style>',
                     '#dsh-update-btn { position:fixed; right:16px; bottom:16px; z-index:99999; ',
@@ -405,16 +405,9 @@ const server = http.createServer((req, res) => {
                     '#dsh-update-status { position:fixed; right:16px; bottom:52px; z-index:99999; ',
                     '  background:rgba(20,20,20,.85); color:#fff; padding:8px 12px; border-radius:8px;',
                     '  font-size:12px; max-width:320px; display:none; white-space:pre-line; }',
-                    // 设置页面更新按钮样式
-                    '#dsh-settings-update { margin:12px 0; display:none; }',
-                    '#dsh-settings-update button { ',
-                    '  background:#185fa5; color:#fff; border:none; border-radius:6px; padding:8px 16px;',
-                    '  font-size:13px; cursor:pointer; display:inline-flex; align-items:center; gap:6px; }',
-                    '#dsh-settings-update button:hover { background:#0c447c; }',
                     '</style>',
                     '<button id="dsh-update-btn">DSH <span id="dsh-ver">?</span><span class="dot gray" id="dsh-dot"></span></button>',
                     '<div id="dsh-update-status"></div>',
-                    '<div id="dsh-settings-update"><button id="dsh-settings-update-btn">🔄 检查 DSH 更新</button></div>',
                     '<script>',
                     '(function(){',
                     '  var BASE = "' + ingressPath + '";',
@@ -422,8 +415,6 @@ const server = http.createServer((req, res) => {
                     '  var verEl = document.getElementById("dsh-ver");',
                     '  var dotEl = document.getElementById("dsh-dot");',
                     '  var box = document.getElementById("dsh-update-status");',
-                    '  var settingsBtn = document.getElementById("dsh-settings-update");',
-                    '  var settingsBtnInner = document.getElementById("dsh-settings-update-btn");',
                     '  function api(path, opts) {',
                     '    var url = BASE + path;',
                     '    return fetch(url, Object.assign({ headers: { "Content-Type": "application/json" } }, opts || {}));',
@@ -453,7 +444,6 @@ const server = http.createServer((req, res) => {
                     '    }).catch(function(e){ show("获取更新状态失败: " + e.message, true); btn.dataset.busy = "0"; btn.classList.remove("loading"); });',
                     '  }',
                     '  btn.addEventListener("click", doUpdate);',
-                    '  settingsBtnInner.addEventListener("click", doUpdate);',
                     '  // 加载更新状态',
                     '  api("/__dsh_update/update/status").then(function(r){ return r.json(); }).then(function(s){',
                     '    console.log("[DSH Update] status:", s);',
@@ -461,8 +451,6 @@ const server = http.createServer((req, res) => {
                     '    if (s.ok && s.next && s.next !== s.current) {',
                     '      dotEl.className = "dot orange";',
                     '      btn.title = "新版本可用: " + s.next;',
-                    '      settingsBtn.style.display = "block";',
-                    '      settingsBtnInner.textContent = "🔄 更新到 " + s.next;',
                     '    } else {',
                     '      dotEl.className = "dot green";',
                     '      btn.title = "已是最新版本";',
@@ -473,18 +461,6 @@ const server = http.createServer((req, res) => {
                     '    dotEl.className = "dot gray";',
                     '    btn.title = "更新服务不可用";',
                     '  });',
-                    '  // MutationObserver: 检测设置页面加载，注入更新按钮',
-                    '  var obs = new MutationObserver(function() {',
-                    '    var settingsArea = document.querySelector("[class*=\\"settings\\"], [class*=\\"Settings\\"], [class*=\\"config\\"], [class*=\\"Config\\"]");',
-                    '    if (settingsArea && !settingsArea.querySelector("#dsh-settings-update")) {',
-                    '      var clone = settingsBtn.cloneNode(true);',
-                    '      clone.id = "dsh-settings-update-clone";',
-                    '      clone.style.display = "block";',
-                    '      clone.querySelector("button").addEventListener("click", doUpdate);',
-                    '      settingsArea.insertBefore(clone, settingsArea.firstChild);',
-                    '    }',
-                    '  });',
-                    '  obs.observe(document.body, { childList: true, subtree: true });',
                     '})();',
                     '</script>'
                 ].join('\n');
@@ -593,7 +569,7 @@ const server = http.createServer((req, res) => {
                 ].join('\n');
 
                 const baseTag = '<base href="' + baseHref + '">\n';
-                body = body.replace('<head>', '<head>' + baseTag + mobileCss + loopbackFixScript + cryptoPolyfillScript + ingressFixScript + storageDiagScript + updateUiScript + pluginUiScript);
+                body = body.replace('<head>', '<head>' + baseTag + mobileCss + loopbackFixScript + cryptoPolyfillScript + updateUiScript + pluginUiScript);
 
                 const headers = cleanHeaders(proxyRes.headers);
                 headers['content-length'] = Buffer.byteLength(body, 'utf-8');
