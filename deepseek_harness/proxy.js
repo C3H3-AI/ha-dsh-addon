@@ -232,28 +232,32 @@ const server = http.createServer((req, res) => {
                 body = body.replace(/"url"\s*:\s*"\/plugins\//g, '"url":"' + ingressPath + '/plugins/');
 
                 // ===== 注入 Ingress 路径修复脚本 =====
-                // 仅重写 WebSocket URL（不拦截 fetch，避免 SPA 卡死）。
-                // DSH 使用 new URL(path, location.origin) 构造 WebSocket 地址，
-                // 得到 wss://api.homediy.top:8443/api/events.host，但 Ingress 要求
-                // wss://api.homediy.top:8443/api/hassio_ingress/TOKEN/api/events.host。
-                // 只对 WebSocket 做 URL 重写，fetch 由 <base> 标签处理。
-                const wsRewriteScript = [
+                // 重写 fetch 和 WebSocket 的 /api/ 路径，加上 Ingress 前缀。
+                // 注意：只拦截 /api/ 开头的请求，不拦截所有 fetch/WS（避免 SPA 卡死）。
+                // <base> 标签不影响 JavaScript fetch()，所以需要在 JS 层重写。
+                const ingressRewriteScript = [
                     '<script>',
                     '(function(){',
                     '  var BASE = "' + ingressPath + '";',
                     '  if (!BASE) return;',
                     '  var ORIGIN = window.location.origin;',
-                    '  function wsRewrite(url) {',
-                    '    var path = typeof url === "string" ? url : (url && url.url) || "";',
+                    '  function rewrite(url) {',
+                    '    var path = typeof url === "string" ? url : (url && url.pathname) || "";',
                     '    if (path.startsWith(BASE)) return null;',
                     '    if (path.indexOf("/api/") === 0) {',
                     '      return ORIGIN + BASE + path;',
                     '    }',
                     '    return null;',
                     '  }',
+                    '  var origFetch = window.fetch;',
+                    '  window.fetch = function(url, opts) {',
+                    '    var rewritten = rewrite(url);',
+                    '    if (rewritten) { url = rewritten; }',
+                    '    return origFetch.call(this, url, opts);',
+                    '  };',
                     '  var OrigWS = window.WebSocket;',
                     '  window.WebSocket = function(url, protocols) {',
-                    '    var rewritten = wsRewrite(url);',
+                    '    var rewritten = rewrite(url);',
                     '    if (rewritten) { url = rewritten; }',
                     '    return new OrigWS(url, protocols);',
                     '  };',
@@ -591,7 +595,7 @@ const server = http.createServer((req, res) => {
                 ].join('\n');
 
                 const baseTag = '<base href="' + baseHref + '">\n';
-                body = body.replace('<head>', '<head>' + baseTag + mobileCss + loopbackFixScript + cryptoPolyfillScript + wsRewriteScript + updateUiScript + pluginUiScript);
+                body = body.replace('<head>', '<head>' + baseTag + mobileCss + loopbackFixScript + cryptoPolyfillScript + ingressRewriteScript + updateUiScript + pluginUiScript);
 
                 const headers = cleanHeaders(proxyRes.headers);
                 headers['content-length'] = Buffer.byteLength(body, 'utf-8');
