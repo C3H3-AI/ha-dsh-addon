@@ -57,6 +57,10 @@ COPY proxy.js /proxy.js
 COPY api_server.js /api_server.js
 RUN chmod a+x /run.sh
 
+# 拷贝 HA 自定义集成（custom_components）
+# 容器启动时 run.sh 会复制到 /config/custom_components/，实现 addon 自带集成
+COPY custom_components/ /custom_components/
+
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD wget -qO- http://127.0.0.1:3081 >/dev/null 2>&1 && wget -qO- http://127.0.0.1:3082/api/status >/dev/null 2>&1 || exit 1
 
