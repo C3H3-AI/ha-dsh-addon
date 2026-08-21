@@ -38,7 +38,7 @@
 
 | 轨道 | 形态 | 语言 | 版本 |
 |------|------|------|------|
-| Add-on 壳 | `deepseek_harness/` 目录 + Docker 镜像 | Bash + Node.js | `0.2.17` |
+| Add-on 壳 | `deepseek_harness/` 目录 + Docker 镜像 | Bash + Node.js | `0.2.19` |
 | 自定义集成 | `custom_components/deepseek_harness/`（HA 商店可装） | Python | `0.2.0` |
 
 > **A+B 架构**：Add-on 通过 HA 原生 MCP Server 连 HA（A 底座，配置即可）；自定义集成为 HA 提供原生对话/实体（B 壳），二者之间只走**稳定桥接 API**，不触碰 DSH 易变的 RC 内部协议。

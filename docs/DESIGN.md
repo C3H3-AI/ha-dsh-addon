@@ -17,7 +17,7 @@
 
 | 属性 | 值 |
 |------|-----|
-| Addon 版本 | `0.2.16`（配套集成 `deepseek_harness` 为 `0.2.0`） |
+| Addon 版本 | `0.2.19`（配套集成 `deepseek_harness` 为 `0.2.0`） |
 | DSH 依赖 | `@deepseek-ai/dsh@next`（rc.8，Dockerfile 固定版本，用户可通过一键更新升级） |
 | Bridge API 鉴权 | 共享密钥 `api_token`（`Bearer`，写操作必带，fail-closed） |
 | Web UI 端口 | Ingress 3080（对外）→ DSH 127.0.0.1:3081（内部） |
