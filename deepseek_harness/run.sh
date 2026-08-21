@@ -146,16 +146,6 @@ fi
 # 创建 DSH 数据目录
 mkdir -p "${DSH_HOME}"
 
-# ===== 纯净安装：清理旧 vendor 目录 =====
-# 确保每次重建后都使用镜像内置的 DSH 版本，而不是被旧 vendor 污染
-# 注意：vendor 目录由一键更新机制创建，重建后应该清除
-# 但保留 sessions/ settings.yaml 等用户数据
-if [ -d "${DSH_HOME}/vendor" ]; then
-    echo "[DSH Addon] Cleaning up old vendor DSH directory (clean install)..."
-    rm -rf "${DSH_HOME}/vendor" "${DSH_HOME}/vendor.tmp" "${DSH_HOME}/vendor.old"
-    echo "[DSH Addon] Vendor directory cleaned"
-fi
-
 # ===== 数据持久化自检探针（轻量级诊断，不执行任何恢复动作）=====
 # 目的：addon 更新/重启后，运维可从启动日志直接确认数据是否完好，
 # 避免"会话/设置丢失"只能等用户报告才发现（DESIGN.md §4）。
