@@ -44,10 +44,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # 安装 pnpm（用于 DSH 插件管理，dsh plugin CLI 依赖 pnpm）
 # 国内网络使用 npmmirror 镜像源加速
-# pnpm 8+ 默认把 global bin 目录放到 ~/.local/share/pnpm/bin（不在 PATH）导致
-# `pnpm config` 报 "not in PATH" 构建失败；将其显式设为 /usr/local/bin（已在 PATH）。
-# 同时把 /usr/local/share/pnpm 放入 PATH，保证运行时 run.sh 调用 dsh plugin 也能找到 pnpm。
-ENV PATH="/usr/local/share/pnpm:/usr/local/bin:${PATH}"
+# pnpm 8+ 默认把 global bin 目录放到 ~/.local/share/pnpm/bin（root 用户即
+# /root/.local/share/pnpm/bin）。该目录默认不在 PATH，导致第一条 `pnpm config`
+# 启动时自检报 "not in PATH" 构建失败。解决办法：
+#  1) 先把默认 global bin 目录加入 PATH，让 pnpm 启动自检通过；
+#  2) 然后显式 `global-bin-dir` 固定到 /usr/local/bin（已在 PATH）；
+#  3) 同时把 /usr/local/share/pnpm、/usr/local/bin 放入 PATH，
+#     保证运行时 run.sh 调用 dsh plugin 也能找到 pnpm。
+ENV PATH="/usr/local/share/pnpm:/usr/local/bin:/root/.local/share/pnpm/bin:${PATH}"
 RUN npm install -g pnpm \
     && pnpm config set global-bin-dir /usr/local/bin --global \
     && pnpm config set registry https://registry.npmmirror.com --global
