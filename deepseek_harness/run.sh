@@ -307,7 +307,9 @@ if [ -d "${DSH_HOME}/profiles/web" ]; then
     PROFILE_BUNDLE="${DSH_HOME}/profiles/web/node_modules/@linxin666/dsh-web-ui-all"
     if [ ! -d "${PROFILE_BUNDLE}" ]; then
         echo "[DSH Addon] WARNING: profile bundle @linxin666/dsh-web-ui-all missing, reinstalling..."
-        node --expose-internals "${DSH_BIN}" plugin --profile web install 2>&1 || echo "[DSH Addon]   WARNING: profile reinstall failed (may be incomplete)"
+        # --config.minimumReleaseAge=0：pnpm 11+ 默认拒绝安装 24h 内发布的新版本
+        # （本项目插件 dsh-im/dshmarket 频繁发版会触发）导致 install 失败、依赖装不全。
+        node --expose-internals "${DSH_BIN}" plugin --profile web install --config.minimumReleaseAge=0 2>&1 || echo "[DSH Addon]   WARNING: profile reinstall failed (may be incomplete)"
     fi
 fi
 
