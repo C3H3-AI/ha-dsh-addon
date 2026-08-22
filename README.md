@@ -47,7 +47,7 @@
 DSH 处于测试期（rc.x），更新频繁。本 addon 提供 Web 一键更新，让用户**自主升级 DSH 到上游最新版**，无需维护者重新发布 addon：
 
 1. 打开 DSH Web UI（侧边栏 → DSH Agent）
-2. 右下角出现 **DSH 更新** 按钮（有新版时）
+2. 进入 **设置（Settings）** 页面，底部出现 **DSH 更新** 卡片
 3. 点击 → 确认 → 自动：`npm install @deepseek-ai/dsh@next` 到 `/data/dsh/vendor` → 原子切换 → 容器重启
 
 - 更新后的 DSH 装在**持久化目录** `/data/dsh/vendor`，镜像内置版保留作离线兜底与回滚
@@ -71,7 +71,7 @@ DSH 处于测试期（rc.x），更新频繁。本 addon 提供 Web 一键更新
 详见 [docs/DESIGN.md](docs/DESIGN.md)（完整设计方案与关键决策记录）。
 
 - 本地测试：`node api_server.js`（需 `DSH_API_TOKEN` 环境变量）
-- 双轨版本号：addon 轨 `config.yaml` == `Dockerfile`（当前 `0.2.16`）；集成轨 `const.py` == `manifest.json`（当前 `0.2.0`）。两轨独立、不跨轨比较。CI 通过 `scripts/check-versions.sh` 校验各自一致。
+- 双轨版本号：addon 轨 `config.yaml` == `Dockerfile`（当前 `0.2.26`）；集成轨 `const.py` == `manifest.json`（当前 `0.2.0`）。两轨独立、不跨轨比较。CI 通过 `scripts/check-versions.sh` 校验各自一致。
 - 测试与 CI：桥接 API 契约测试在 `tests/`（随仓库提交），CI（`.github/workflows/ci.yml`）跑 lint + 版本校验 + 契约测试 + 镜像构建。
 
 ## License

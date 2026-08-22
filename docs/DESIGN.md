@@ -17,7 +17,7 @@
 
 | 属性 | 值 |
 |------|-----|
-| Addon 版本 | `0.2.19`（配套集成 `deepseek_harness` 为 `0.2.0`） |
+| Addon 版本 | `0.2.26`（配套集成 `deepseek_harness` 为 `0.2.0`） |
 | DSH 依赖 | `@deepseek-ai/dsh@next`（rc.8，Dockerfile 固定版本，用户可通过一键更新升级） |
 | Bridge API 鉴权 | 共享密钥 `api_token`（`Bearer`，写操作必带，fail-closed） |
 | Web UI 端口 | Ingress 3080（对外）→ DSH 127.0.0.1:3081（内部） |
@@ -222,7 +222,7 @@ addon 壳与配套集成 `deepseek_harness` 采用**独立版本轨道**（见 �
 
 | 轨道 | 文件 | 约束 |
 |------|------|------|
-| addon 轨 | `config.yaml` 的 `version` + `Dockerfile` 的 `ARG BUILD_VERSION` / `io.hass.version` label | 二者必须相等（当前 `0.2.16`） |
+| addon 轨 | `config.yaml` 的 `version` + `Dockerfile` 的 `ARG BUILD_VERSION` / `io.hass.version` label | 二者必须相等（当前 `0.2.26`） |
 | 集成轨 | `custom_components/deepseek_harness/const.py` 的 `VERSION` + `manifest.json` 的 `version` | 二者必须相等（当前 `0.2.0`） |
 
 - **两轨不跨轨比较**：addon 0.2.16 ≠ 集成 0.2.0 是**正确且既定**的设计，并非版本漂移。
@@ -239,6 +239,35 @@ addon 壳与配套集成 `deepseek_harness` 采用**独立版本轨道**（见 �
 - 用户可通过 Web UI 一键更新按钮随时切换到 `latest` 或 `next` 通道。
 - DSH 在镜像只读层，`npm update -g` 会破坏包 → 需要"Web 一键更新"方案（见 §9）。
 - **设计动机**：DSH 更新快（测试期），若每次上游发 rc 都要维护者重新构建 addon 镜像，成本不可接受。正确姿势是 addon 壳稳定、DSH 本体由用户按需一键更新到上游（见 §9.0 更新边界原则）。
+
+### 8.6 pnpm Store 路径固定（NODENPMRC + NODERELINK）
+
+pnpm 的默认 store 路径取决于 `$HOME` 环境变量，容器重建后 `$HOME` 可能变化，导致旧 `node_modules` 的硬链接失效，所有插件操作（安装/更新/卸载）失败。
+
+**解决方案（run.sh 两段式）：**
+
+1. **NODENPMRC**（在任何 `dsh plugin` 命令之前执行）：预写 `$DSH_HOME/profiles/web/.npmrc`，固定 `store-dir=/data/.pnpm-store`，确保首次安装即使用正确路径。
+2. **NODERELINK**（兜底）：检查 `/data/.pnpm-store` 是否为空，为空时自动 `pnpm install --force` 重新链接。
+
+**关键教训**：DSH 的 `node_modules` 不使用标准 pnpm 虚拟存储布局（`.pnpm/` 目录仅含 `lock.yaml`），包直接装在 `node_modules/` 下。因此 NODERELINK 的检测逻辑只能检查 store 目录是否为空，不能检查 `.pnpm/` 虚拟目录。
+
+### 8.7 settings.yaml 配置合并（NODEMERGE）
+
+用户通过 HA 配置页修改 `api_key/model/provider/base_url` 后重启，需要将新配置同步到 DSH 的 `settings.yaml`。
+
+**方案**：每次启动时执行 `NODEMERGE` 段，优先使用 `js-yaml`（从 dshmarket 加载）进行结构化 YAML 解析，只修改 `models.default` 和 `providers[provider]`，不碰其他配置（locale/onboarding/pet 等）。
+
+**文本回退模式**：当 `js-yaml` 不可用时（dshmarket 未安装），使用行级文本替换。**注意**：文本模式的 `^\s*default:` 正则曾误匹配 `agent-presets.default`，导致 `agent-presets.default` 被改成 provider 名。修复方式：新增 `inModels` 标志，确保只替换 `models:` 区块内的 `default:`。
+
+### 8.8 GitHub Release 规范
+
+每次版本发布需：
+1. 同步更新 `config.yaml` 和 `Dockerfile` 的 `BUILD_VERSION`
+2. 创建 git tag（`v0.2.x` 格式）
+3. push tag 到 GitHub
+4. 更新 Supervisor 容器内 git repo（`docker exec hassio_supervisor git fetch + merge`）
+5. 重启 Supervisor 刷新 store 缓存
+6. 触发 addon update
 
 ### 8.5 DSH 会话能力的关键事实（影响架构决策）
 - **headless profile（Assist 通道）是单轮 one-shot**：`dsh-headless/lib/index.js` 每次 `sessionId: SessionId(\`session-${randomUUID()}\`)`，每次新建随机会话、无 CLI 参数（`--session`/`--resume`/`--continue`）可复用。
@@ -273,12 +302,14 @@ addon 壳与配套集成 `deepseek_harness` 采用**独立版本轨道**（见 �
 
 ### 9.3 三层架构
 ```
-[DSH Web] 注入更新按钮（复用 run.sh HTML 注入机制）
+[DSH Web 设置页] 注入更新按钮（通过 proxy.js 注入脚本，在设置页底部显示）
    ▼
 [bridge API] GET/POST /api/update* → npm 装新版到 /data/dsh/vendor + 写标记
    ▼
 [run.sh] 启动时优先加载 /data/dsh/vendor 的新版 DSH
 ```
+
+**更新按钮位置**：注入在 DSH 设置页（Settings）底部，而非页面右下角浮动。通过 `MutationObserver` 监听 DOM 变化，在设置页内容区域注入"DSH 更新"卡片。**兼容性**：支持多种 DSH 版本的 DOM 结构，通过 URL 路径检测（`location.pathname` 包含 `settings`）+ 多级 CSS 选择器兜底。
 
 ### 9.4 改动点
 | 文件 | 改动 |
