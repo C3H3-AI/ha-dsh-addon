@@ -10,9 +10,9 @@
  * 4. Rewrites /api/host.describe to return hostname=127.0.0.1.
  * 5. Relays /__dsh_update* endpoints to the bridge API, injecting the
  *    shared token so browser-side code never holds it.
- * 6. Relays /__dsh_plugin* endpoints to the bridge API for plugin
- *    management (install / uninstall / list).
- * 7. Proxies WebSocket upgrade requests with Host/Origin header override.
+ * 6. Proxies WebSocket upgrade requests with Host/Origin header override.
+ *
+ * (plugin management is delegated to the dsh-market plugin's own UI)
  *
  * Environment variables:
  *   DSH_API_PORT   — bridge API port (default 3082)
@@ -92,40 +92,6 @@ const server = http.createServer((req, res) => {
             if (res.headersSent) return;
             res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({ ok: false, error: 'bridge relay failed: ' + e.message }));
-        });
-        req.pipe(b);
-        return;
-    }
-
-    // 插件管理端点：/__dsh_plugin* -> bridge API :3082（与更新端点同模式，注入 token 转给浏览器）
-    if (targetPath.indexOf('/__dsh_plugin') === 0) {
-        if (!ingressPath) {
-            log('[HTTP-' + reqId + ']', 'plugin denied: no x-ingress-path (non-ingress source)');
-            res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ ok: false, error: 'forbidden: plugin endpoint is ingress-only' }));
-            return;
-        }
-        const bridgePath = '/api' + targetPath.slice('/__dsh_plugin'.length);
-        const headers = Object.assign({}, req.headers);
-        delete headers['host'];
-        delete headers['origin'];
-        delete headers['x-ingress-path'];
-        if (BRIDGE_TOKEN) headers['Authorization'] = 'Bearer ' + BRIDGE_TOKEN;
-        const b = http.request({
-            hostname: '127.0.0.1',
-            port: BRIDGE_PORT,
-            path: bridgePath,
-            method: req.method,
-            headers: headers
-        }, (bres) => {
-            log('[HTTP-' + reqId + ']', 'plugin relay:', req.method, bridgePath, '->', bres.statusCode);
-            res.writeHead(bres.statusCode, { 'Content-Type': 'application/json; charset=utf-8' });
-            bres.pipe(res);
-        });
-        b.on('error', (e) => {
-            if (res.headersSent) return;
-            res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(JSON.stringify({ ok: false, error: 'plugin relay failed: ' + e.message }));
         });
         req.pipe(b);
         return;
@@ -511,10 +477,18 @@ const server = http.createServer((req, res) => {
                     '    });',
                     '  }',
                     '  // 监听 DOM 变化，等设置页面加载后注入',
-                    '  var observer = new MutationObserver(function() { inject(); });',
-                    '  observer.observe(document.body, { childList: true, subtree: true });',
-                    '  // 立即尝试一次',
-                    '  setTimeout(inject, 2000);',
+                    '  function startObserver() {',
+                    '    if (!document.body) { setTimeout(startObserver, 100); return; }',
+                    '    var observer = new MutationObserver(function() { inject(); });',
+                    '    observer.observe(document.body, { childList: true, subtree: true });',
+                    '    // 立即尝试一次',
+                    '    setTimeout(inject, 2000);',
+                    '  }',
+                    '  if (document.readyState === "loading") {',
+                    '    document.addEventListener("DOMContentLoaded", startObserver);',
+                    '  } else {',
+                    '    startObserver();',
+                    '  }',
                     '})();',
                     '</script>'
                 ].join('\n');

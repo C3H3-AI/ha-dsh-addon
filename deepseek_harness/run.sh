@@ -229,8 +229,134 @@ else
 fi
 
 # 写入 DSH 配置文件（模型提供商配置）
+# 策略：已存在時 merge 只更新 provider 配置，不碰 DSH UI 產生的設定（locale/onboarding/pet 等）；
+# 不存在時從頭創建。
+# 這樣用戶在 HA 配置頁面修改 api_key/model/provider/base_url 後重啟即生效，
+# 無需手動刪除 settings.yaml。
 DSH_CONFIG="${DSH_HOME}/settings.yaml"
-if [ ! -f "${DSH_CONFIG}" ]; then
+if [ -f "${DSH_CONFIG}" ]; then
+    echo "[DSH Addon] Merging provider config into existing settings.yaml..."
+    # 导出供 node 内嵌脚本读取（settings.yaml merge）
+    export HA_PROVIDER="${PROVIDER}"
+    export HA_MODEL="${MODEL}"
+    export HA_API_KEY="${API_KEY}"
+    export HA_BASE_URL="${BASE_URL}"
+    node << 'NODEMERGE'
+const fs = require('fs');
+const path = require('path');
+const yamlPath = process.env.DSH_CONFIG || '/data/dsh/settings.yaml';
+const provider = process.env.HA_PROVIDER || 'deepseek-official';
+const model = process.env.HA_MODEL || 'deepseek-v4-flash';
+const apiKey = process.env.HA_API_KEY || '';
+const baseUrl = process.env.HA_BASE_URL || '';
+// 嘗試從 dshmarket 加載 js-yaml
+let yaml;
+try {
+  yaml = require('/data/dsh/profiles/web/node_modules/dshmarket/node_modules/js-yaml');
+} catch {
+  console.log('[DSH Addon]   js-yaml not available, falling back to text merge');
+  yaml = null;
+}
+if (yaml) {
+  // YAML 模式：完全解析，只改 providers 和 models.default
+  try {
+    const doc = yaml.load(fs.readFileSync(yamlPath, 'utf8'));
+    if (!doc) throw new Error('empty YAML');
+    doc.models = doc.models || {};
+    doc.models.default = provider;
+    doc.providers = doc.providers || {};
+    doc.providers[provider] = doc.providers[provider] || {};
+    doc.providers[provider].apiKey = apiKey;
+    doc.providers[provider].model = model;
+    if (baseUrl) doc.providers[provider].baseUrl = baseUrl;
+    else delete doc.providers[provider].baseUrl;
+    fs.writeFileSync(yamlPath, yaml.dump(doc, { lineWidth: 120, noRefs: true, quotingType: '"', forceQuotes: true }));
+    console.log('[DSH Addon]   settings.yaml merged (yaml mode)');
+  } catch (e) {
+    console.log('[DSH Addon]   yaml merge failed: ' + e.message + ', falling back to text merge');
+    yaml = null;
+  }
+}
+if (!yaml) {
+  // 文本回退模式：行級替換，不碰非 provider 行
+  let content = fs.readFileSync(yamlPath, 'utf8');
+  let lines = content.split('\n');
+  let inProviders = false;
+  let currentProvider = null;
+  let providerDone = false;
+  let result = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    // 替換 models.default
+    if (/^\s*default:/.test(line) && !inProviders) {
+      result.push('  default: "' + provider + '"');
+      continue;
+    }
+    // 追蹤 providers: 區塊
+    if (/^providers:/.test(line)) {
+      inProviders = true;
+      result.push(line);
+      continue;
+    }
+    if (inProviders) {
+      // 遇到非縮進行（新頂層 key）時退出 providers
+      if (!/^\s/.test(line) && line.trim() !== '') {
+        if (!providerDone) {
+          // 在 providers 塊末尾插入當前 provider
+          result.push('  "' + provider + '":');
+          result.push('    apiKey: "' + apiKey + '"');
+          result.push('    model: "' + model + '"');
+          if (baseUrl) result.push('    baseUrl: "' + baseUrl + '"');
+          providerDone = true;
+        }
+        inProviders = false;
+        result.push(line);
+        continue;
+      }
+      // providers 內，匹配 provider key
+      const pm = line.match(/^\s+"([^"]+)":/);
+      if (pm) {
+        // 輸出前一個 provider 的內容（跳過已處理的）
+        if (currentProvider === provider) {
+          // 跳過已處理的 provider 的 key/apiKey/model/baseUrl 行
+          currentProvider = pm[1];
+          continue;
+        }
+        currentProvider = pm[1];
+        if (currentProvider === provider) {
+          // 輸出這個 provider 的 key，然後跳過其子行
+          result.push(line);
+          providerDone = true;
+          continue;
+        }
+        result.push(line);
+        continue;
+      }
+      // provider 子行
+      if (currentProvider === provider) {
+        // 跳過 apiKey/model/baseUrl 行（已被替換）
+        if (/^\s{4,}(apiKey|model|baseUrl):/.test(line)) continue;
+        result.push(line);
+        continue;
+      }
+      result.push(line);
+      continue;
+    }
+    result.push(line);
+  }
+  // 如果遍歷完還沒插入 provider（文件裏沒有 providers 塊）
+  if (!providerDone) {
+    result.push('providers:');
+    result.push('  "' + provider + '":');
+    result.push('    apiKey: "' + apiKey + '"');
+    result.push('    model: "' + model + '"');
+    if (baseUrl) result.push('    baseUrl: "' + baseUrl + '"');
+  }
+  fs.writeFileSync(yamlPath, result.join('\n'));
+  console.log('[DSH Addon]   settings.yaml merged (text mode)');
+}
+NODEMERGE
+else
     echo "[DSH Addon] Creating initial DSH configuration..."
     cat > "${DSH_CONFIG}" << EOCONFIG
 models:
@@ -239,6 +365,7 @@ providers:
   "${PROVIDER}":
     apiKey: "${API_KEY}"
     model: "${MODEL}"
+    ${BASE_URL:+baseUrl: "${BASE_URL}"}
 EOCONFIG
 fi
 
@@ -309,6 +436,34 @@ fi
 # 上游更新后需要重新构建 Docker 镜像来更新 DSH
 echo "[DSH Addon] DSH version: $(node -e "console.log(require('${DSH_BIN%bin.js}../package.json').version || 'unknown')" 2>/dev/null || echo 'unknown')"
 
+# ===== 预写 pnpm store-dir 到 .npmrc（必须在任何 dsh plugin 命令之前）=====
+# 确保 profile 的 node_modules 从首次创建起就使用固定的持久化 store 路径，
+# 避免 pnpm 默认 store 路径在容器重建后漂移，导致所有插件操作失败。
+# 注意：此段必须在下面的 dsh-market 安装和 profile 完整性检查之前执行。
+node << 'NODENPMRC'
+const fs = require('fs');
+const path = require('path');
+const prof = path.join(process.env.DSH_HOME || '/data/dsh', 'profiles', 'web');
+const npmrc = path.join(prof, '.npmrc');
+const STORE_DIR = '/data/.pnpm-store';
+// 确保 profile 目录存在（即使 profile 尚未初始化）
+fs.mkdirSync(prof, { recursive: true });
+// 读取或创建 .npmrc，确保 store-dir 指向固定路径
+let content = '';
+if (fs.existsSync(npmrc)) {
+  content = fs.readFileSync(npmrc, 'utf8');
+}
+const storeLine = 'store-dir=' + STORE_DIR;
+if (!content.includes(storeLine)) {
+  content = content.replace(/^store-dir=.*$/gm, '').trim();
+  content += '\n' + storeLine + '\n';
+  fs.writeFileSync(npmrc, content);
+  console.log('[DSH Addon]   pnpm store-dir pre-set to ' + STORE_DIR);
+}
+// 确保 store 目录存在
+fs.mkdirSync(STORE_DIR, { recursive: true });
+NODENPMRC
+
 # ===== 检查并修复 DSH profile 完整性 =====
 # 异常退出可能导致 profile 缺少关键包（如 @linxin666/dsh-web-ui-all），
 # DSH 启动时报 "cannot resolve profile bundle"。用 dsh plugin 命令重新安装。
@@ -316,9 +471,7 @@ if [ -d "${DSH_HOME}/profiles/web" ]; then
     PROFILE_BUNDLE="${DSH_HOME}/profiles/web/node_modules/@linxin666/dsh-web-ui-all"
     if [ ! -d "${PROFILE_BUNDLE}" ]; then
         echo "[DSH Addon] WARNING: profile bundle @linxin666/dsh-web-ui-all missing, reinstalling..."
-        # --config.minimumReleaseAge=0：pnpm 11+ 默认拒绝安装 24h 内发布的新版本
-        # （本项目插件 dsh-im/dshmarket 频繁发版会触发）导致 install 失败、依赖装不全。
-        node --expose-internals "${DSH_BIN}" plugin --profile web install --config.minimumReleaseAge=0 2>&1 || echo "[DSH Addon]   WARNING: profile reinstall failed (may be incomplete)"
+        node --expose-internals "${DSH_BIN}" plugin --profile web install 2>&1 || echo "[DSH Addon]   WARNING: profile reinstall failed (may be incomplete)"
     fi
 fi
 
@@ -326,15 +479,110 @@ fi
 # 首次启动自动安装 DSH 官方插件市场，使用户可在 Web UI 的
 # Settings → Plugin Market 浏览/搜索/一键安装社区插件。
 # 仅在未安装时执行一次；无关注册表、缓存失败或网络异常时本次跳过，下次启动重试。
-# 注意：--config.minimumReleaseAge=0 用于绕过 pnpm 11+ 对 24h 内新版本的上架延迟限制。
+# 注意：minimumReleaseAge 已由 pnpm-workspace.yaml 原生配置，无需 CLI 参数。
 DSH_MARKET_DIR="${DSH_HOME}/profiles/web/node_modules/dshmarket"
 if [ ! -d "${DSH_MARKET_DIR}" ]; then
     echo "[DSH Addon] dsh-market not installed -> default-installing (one-time)..."
-    node --expose-internals "${DSH_BIN}" plugin --profile web add dshmarket --config.minimumReleaseAge=0 2>&1 \
+    node --expose-internals "${DSH_BIN}" plugin --profile web add dshmarket 2>&1 \
         || echo "[DSH Addon]   WARNING: dsh-market install failed (check network/registry), will retry next start"
 else
     echo "[DSH Addon] dsh-market already installed (skipped)"
 fi
+
+# ===== 清理 dsh-market 孤儿热补丁（hot-*.yml）=====
+# dsh-market 为 client 类插件动态生成 .dsh-market/hot-*.yml 前端补丁，
+# 但卸载插件时可能不清理，残留补丁引用的模块已删除，导致前端加载报
+# "Failed to load plugins: ... bundle script .../plugins/<pkg>/client.js failed to load"。
+# 启动时对每个 hot 文件做"引用的顶层包是否仍存在"校验，全部不存在即为孤儿，删除。
+node << 'NODECLEAN'
+const fs = require('fs');
+const path = require('path');
+const prof = process.env.DSH_HOME ? path.join(process.env.DSH_HOME, 'profiles', 'web') : '/data/dsh/profiles/web';
+const hotDir = path.join(prof, '.dsh-market');
+if (!fs.existsSync(hotDir)) process.exit(0);
+const nodemods = path.join(prof, 'node_modules');
+const exists = (p) => fs.existsSync(nodemods) && fs.existsSync(path.join(nodemods, p));
+let kept = 0, removed = 0;
+for (const file of fs.readdirSync(hotDir)) {
+  if (!/^hot-.*\.yml$/.test(file)) continue;
+  const full = path.join(hotDir, file);
+  let content;
+  try { content = fs.readFileSync(full, 'utf8'); } catch { continue; }
+  const refs = new Set();
+  const r1 = /plugins\/(@[^/]+\/[^/]+|[^/]+)\/client\.js/g;
+  const r2 = /node_modules\/(@[^/]+\/[^/]+|[^/]+)/g;
+  const r3 = new RegExp("name:\\s*['\"]?(@[a-z0-9-]+\\/[a-z0-9-]+|[a-z0-9][a-z0-9._-]*[a-z0-9])", 'g');
+  let m;
+  while ((m = r1.exec(content))) refs.add(m[1]);
+  while ((m = r2.exec(content))) refs.add(m[1]);
+  while ((m = r3.exec(content))) refs.add(m[1].replace(/['"]/g, ''));
+  if (refs.size === 0) continue;
+  let anyExists = false;
+  for (const r of refs) { if (exists(r)) { anyExists = true; break; } }
+  if (anyExists) { kept++; continue; }
+  console.log('[DSH Addon]   cleanup orphan hot patch: ' + file + ' (refs: ' + Array.from(refs).join(', ') + ')');
+  try { fs.unlinkSync(full); removed++; } catch {}
+}
+console.log('[DSH Addon] orphan hot patches: removed=' + removed + ', kept=' + kept);
+NODECLEAN
+
+# ===== 冪等補全 pnpm-workspace.yaml 策略（全新安裝也能裝 build 類插件）=====
+# DSH 官方 initProfile 模板只含 packages/nodeLinker/autoInstallPeers 三行，
+# 不帶 minimumReleaseAge 和 allowBuilds。pnpm 11 默認禁止 24h 內新包和構建腳本，
+# 導致全新安裝時 "dsh plugin add" 裝 build 類插件（如 node-pty）必被攔。
+# 每次啟動時檢查並補全，已在運行的環境（已有白名單）不受影響。
+node << 'NODEWS'
+const fs = require('fs');
+const path = require('path');
+const wsPath = path.join(process.env.DSH_HOME || '/data/dsh', 'profiles', 'web', 'pnpm-workspace.yaml');
+if (!fs.existsSync(wsPath)) process.exit(0);
+let content = fs.readFileSync(wsPath, 'utf8');
+let changed = false;
+if (!content.includes('minimumReleaseAge')) {
+  content = content.replace('autoInstallPeers: false', 'autoInstallPeers: false\nminimumReleaseAge: 0');
+  changed = true;
+}
+if (!content.includes('allowBuilds')) {
+  content += '\nallowBuilds:\n  node-pty: true\n  ssh2: true\n';
+  changed = true;
+}
+if (changed) {
+  fs.writeFileSync(wsPath, content);
+  console.log('[DSH Addon]   pnpm-workspace.yaml patched: minimumReleaseAge + allowBuilds');
+} else {
+  console.log('[DSH Addon]   pnpm-workspace.yaml already configured (skipped)');
+}
+NODEWS
+
+# ===== 检查并修复 pnpm store 链接失效（环境重建后 store 被清空的情况）=====
+# .npmrc 的 store-dir 已在前面 NODENPMRC 段预写，这里只做兜底恢复：
+# 若 node_modules 已存在但 store 目录为空（容器重建后 /data/.pnpm-store 被清空），
+# 自动 pnpm install --force 重新链接。
+node << 'NODERELINK'
+const fs = require('fs');
+const path = require('path');
+const { execSync } = require('child_process');
+const prof = path.join(process.env.DSH_HOME || '/data/dsh', 'profiles', 'web');
+const STORE_DIR = '/data/.pnpm-store';
+const nmDir = path.join(prof, 'node_modules');
+const pkgTest = path.join(nmDir, '.pnpm', 'pnpm-lock.yaml');
+if (!fs.existsSync(pkgTest)) { process.exit(0); }
+let storeOk = false;
+try { const pkgs = fs.readdirSync(STORE_DIR); storeOk = pkgs.length > 0; } catch { storeOk = false; }
+if (!storeOk) {
+  console.log('[DSH Addon]   pnpm store is empty/missing, running pnpm install --force...');
+  try {
+    execSync('pnpm install --force --no-frozen-lockfile', {
+      cwd: prof, stdio: ['ignore', 'pipe', 'pipe'], timeout: 120000,
+      env: Object.assign({}, process.env, { PNPM_HOME: process.env.PNPM_HOME || '/data/dsh/.local/share/pnpm' })
+    });
+    console.log('[DSH Addon]   pnpm install --force completed (store relinked)');
+  } catch (e) {
+    console.log('[DSH Addon]   WARNING: pnpm relink failed: ' + (e.stderr || e.message).toString().slice(0, 300));
+    console.log('[DSH Addon]   Plugins may need manual reinstall via DSH plugin market');
+  }
+}
+NODERELINK
 
 # 注意：DSH 安全限制，不允许绑定 0.0.0.0（安全原因：会暴露远程代码执行到网络）
 # 因此策略是：DSH 监听 127.0.0.1:3081，再启动 Node.js TCP 代理监听 0.0.0.0:3080 转发到 127.0.0.1:3081

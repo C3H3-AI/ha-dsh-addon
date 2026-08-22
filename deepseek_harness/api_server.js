@@ -341,95 +341,11 @@ function handleUpdateResult(req, res) {
   sendJson(res, 200, updateResult || { status: 'idle' });
 }
 
-// ---- 插件管理（DESIGN.md §8 扩展）----
-// 运行 dsh plugin CLI 命令（转发给 pnpm，然后 reconcile bundles）
-function runPluginCommand(args) {
-  return new Promise((resolve, reject) => {
-    const child = spawn('node', [DSH_BIN, 'plugin', '--profile', 'web', ...args], {
-      env: { ...process.env },
-      timeout: 120000,
-    });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', (d) => { stdout += d.toString(); });
-    child.stderr.on('data', (d) => { stderr += d.toString(); });
-    child.on('close', (code) => {
-      resolve({ code, stdout, stderr });
-    });
-    child.on('error', (e) => reject(e));
-  });
-}
-
-// POST /api/plugin/install { package: "package-name" }
-async function handlePluginInstall(req, res) {
-  try {
-    const raw = await readBody(req);
-    const body = raw ? JSON.parse(raw) : {};
-    const pkg = (body.package || '').toString().trim();
-    if (!pkg) {
-      sendJson(res, 400, { ok: false, error: '缺少 package 字段' });
-      return;
-    }
-    const result = await runPluginCommand(['add', pkg]);
-    if (result.code === 0) {
-      console.log('[DSH Addon] plugin installed:', pkg);
-      sendJson(res, 200, { ok: true, message: `插件 ${pkg} 安装成功` });
-    } else {
-      const errMsg = (result.stderr || result.stdout || '').slice(0, 500);
-      sendJson(res, 502, { ok: false, error: `安装失败 (${result.code}): ${errMsg}` });
-    }
-  } catch (e) {
-    sendJson(res, 502, { ok: false, error: e.message });
-  }
-}
-
-// POST /api/plugin/uninstall { package: "package-name" }
-async function handlePluginUninstall(req, res) {
-  try {
-    const raw = await readBody(req);
-    const body = raw ? JSON.parse(raw) : {};
-    const pkg = (body.package || '').toString().trim();
-    if (!pkg) {
-      sendJson(res, 400, { ok: false, error: '缺少 package 字段' });
-      return;
-    }
-    const result = await runPluginCommand(['remove', pkg]);
-    if (result.code === 0) {
-      console.log('[DSH Addon] plugin uninstalled:', pkg);
-      sendJson(res, 200, { ok: true, message: `插件 ${pkg} 卸载成功` });
-    } else {
-      const errMsg = (result.stderr || result.stdout || '').slice(0, 500);
-      sendJson(res, 502, { ok: false, error: `卸载失败 (${result.code}): ${errMsg}` });
-    }
-  } catch (e) {
-    sendJson(res, 502, { ok: false, error: e.message });
-  }
-}
-
-// GET /api/plugin/list
-function handlePluginList(req, res) {
-  const dshHome = process.env.DSH_HOME || '/data/dsh';
-  const profileDir = path.join(dshHome, 'profiles', 'web');
-  const pkgPath = path.join(profileDir, 'package.json');
-  try {
-    if (fs.existsSync(pkgPath)) {
-      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
-      const deps = Object.keys(pkg.dependencies || {});
-      sendJson(res, 200, { ok: true, plugins: deps, count: deps.length });
-    } else {
-      sendJson(res, 200, { ok: true, plugins: [], count: 0 });
-    }
-  } catch (e) {
-    sendJson(res, 500, { ok: false, error: e.message });
-  }
-}
-
 const server = http.createServer((req, res) => {
-  // 只读端点免鉴权：状态查询、更新状态、更新结果、插件列表
+  // 只读端点免鉴权：状态查询、更新状态、更新结果
   if (req.method === 'GET' && req.url === '/api/status') return handleStatus(req, res);
   if (req.method === 'GET' && req.url === '/api/update/status') return handleUpdateStatus(req, res);
   if (req.method === 'GET' && req.url === '/api/update/result') return handleUpdateResult(req, res);
-  if (req.method === 'GET' && req.url === '/api/plugin/list') return handlePluginList(req, res);
   // 写操作必须带 token（fail-closed）
   if (!tokenMatches(req.headers['authorization'])) {
     sendJson(res, 401, {
@@ -441,8 +357,6 @@ const server = http.createServer((req, res) => {
   if (req.method === 'POST' && req.url === '/api/update') return handleUpdate(req, res);
   if (req.method === 'POST' && req.url === '/api/chat') return handleChat(req, res);
   if (req.method === 'POST' && req.url === '/api/restart') return handleRestart(req, res);
-  if (req.method === 'POST' && req.url === '/api/plugin/install') return handlePluginInstall(req, res);
-  if (req.method === 'POST' && req.url === '/api/plugin/uninstall') return handlePluginUninstall(req, res);
   sendJson(res, 404, { error: 'not found' });
 });
 
