@@ -565,8 +565,9 @@ const { execSync } = require('child_process');
 const prof = path.join(process.env.DSH_HOME || '/data/dsh', 'profiles', 'web');
 const STORE_DIR = '/data/.pnpm-store';
 const nmDir = path.join(prof, 'node_modules');
-const pkgTest = path.join(nmDir, '.pnpm', 'pnpm-lock.yaml');
-if (!fs.existsSync(pkgTest)) { process.exit(0); }
+const lockFile = path.join(nmDir, '.pnpm', 'pnpm-lock.yaml');
+if (!fs.existsSync(lockFile)) { process.exit(0); }
+// 检查 store 目录是否为空（容器重建后 /data/.pnpm-store 可能被清空）
 let storeOk = false;
 try { const pkgs = fs.readdirSync(STORE_DIR); storeOk = pkgs.length > 0; } catch { storeOk = false; }
 if (!storeOk) {
