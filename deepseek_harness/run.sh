@@ -281,14 +281,19 @@ if (!yaml) {
   // 文本回退模式：行級替換，不碰非 provider 行
   let content = fs.readFileSync(yamlPath, 'utf8');
   let lines = content.split('\n');
+  let inModels = false;
   let inProviders = false;
   let currentProvider = null;
   let providerDone = false;
   let result = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    // 替換 models.default
-    if (/^\s*default:/.test(line) && !inProviders) {
+    // 追蹤頂層區塊進入/退出
+    if (/^[a-z]/.test(line) && /^\S/.test(line)) {
+      inModels = /^models:/.test(line);
+    }
+    // 替換 models.default（只在 models 區塊內生效）
+    if (/^\s*default:/.test(line) && inModels) {
       result.push('  default: "' + provider + '"');
       continue;
     }
