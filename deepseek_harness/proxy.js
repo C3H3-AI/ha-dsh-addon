@@ -304,6 +304,37 @@ const server = http.createServer((req, res) => {
                     '    max-width: 100% !important;',
                     '    box-sizing: border-box !important;',
                     '  }',
+                    // 设置对话框：移动端强制上下分布（导航在上、内容在下）
+                    // DSH 桌面端是左(导航)右(内容)布局，窄屏下对话框虽切为纵向 flex，
+                    // 但导航仍保留固定宽度(如 188px)且对话框 overflow:hidden，
+                    // 导致导航右侧留白、内容被压缩到很小甚至被裁剪(遮挡)。
+                    // 修复：导航占满整行并换行排列，内容占满剩余空间且可滚动。
+                    '  [role="dialog"] > nav {',
+                    '    width: 100% !important;',
+                    '    max-width: 100% !important;',
+                    '    box-sizing: border-box !important;',
+                    '    flex: 0 0 auto !important;',
+                    '    flex-direction: row !important;',
+                    '    flex-wrap: wrap !important;',
+                    '    align-content: flex-start !important;',
+                    '    gap: 4px !important;',
+                    '    overflow: auto !important;',
+                    '    max-height: 40vh !important;',
+                    '  }',
+                    '  [role="dialog"] > nav > * {',
+                    '    flex: 0 0 auto !important;',
+                    '    white-space: nowrap !important;',
+                    '  }',
+                    '  [role="dialog"] > nav + * {',
+                    '    width: 100% !important;',
+                    '    min-width: 0 !important;',
+                    '    box-sizing: border-box !important;',
+                    '    flex: 1 1 auto !important;',
+                    '    overflow: auto !important;',
+                    '  }',
+                    '  [role="dialog"] {',
+                    '    overflow: auto !important;',
+                    '  }',
                     // 底部安全区域
                     '  body {',
                     '    padding-bottom: env(safe-area-inset-bottom, 0px) !important;',
