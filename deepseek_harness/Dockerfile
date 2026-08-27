@@ -22,8 +22,8 @@ LABEL \
     io.hass.arch="${BUILD_ARCH}" \
     io.hass.type="addon" \
     io.hass.name="DeepSeek Harness" \
-    io.hass.description="DeepSeek Harness - 开源 AI Agent 运行框架，一切皆插件" \
-    io.hass.url="https://github.com/deepseek-ai/deepseek-harness"
+    io.hass.description="DeepSeek Harness Home Assistant 加载项 - 在 HA 中运行开源 AI Agent 框架，一切皆插件" \
+    io.hass.url="https://github.com/C3H3-AI/ha-dsh-addon"
 
 # 使用国内镜像源加速
 RUN sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
