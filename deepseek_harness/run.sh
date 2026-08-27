@@ -680,6 +680,29 @@ echo "[DSH Addon] Starting HTTP proxy on 0.0.0.0:3080 -> 127.0.0.1:3081..."
 node /proxy.js &
 PROXY_PID=$!
 
+# ===== HA MCP 本地回环代理（供 dsh-mcp-connector 连接局域网 HTTP 的 HA MCP）=====
+# dsh-mcp-connector 出于安全只接受 https:// 或 127.0.0.1/localhost 的 http:// URL。
+# 容器内 HA 只能经 http://homeassistant:8123（非回环）访问，故起本地回环代理：
+# 127.0.0.1:HA_MCP_PROXY_LISTEN -> homeassistant:8123，MCP server 配置为 http://127.0.0.1:端口/... 即可通过校验。
+# 脚本位于持久化目录 /data/dsh/ha-mcp-proxy.js（重建不丢）。可通过环境变量覆盖监听端口/目标。
+HA_MCP_PROXY_LISTEN="${HA_MCP_PROXY_LISTEN:-8124}"
+HA_MCP_PROXY_TARGET="${HA_MCP_PROXY_TARGET:-homeassistant}"
+HA_MCP_PROXY_TPORT="${HA_MCP_PROXY_TPORT:-8123}"
+HA_MCP_PROXY_PID=""
+# 优先用持久化目录的脚本；若不存在则从镜像内置副本复制（重建后 /data/dsh 可能被清）
+if [ ! -f /data/dsh/ha-mcp-proxy.js ] && [ -f /ha-mcp-proxy.js ]; then
+    cp /ha-mcp-proxy.js /data/dsh/ha-mcp-proxy.js
+    echo "[DSH Addon]   restored ha-mcp-proxy.js from image copy"
+fi
+if [ -f /data/dsh/ha-mcp-proxy.js ]; then
+    echo "[DSH Addon] Starting HA MCP local proxy on 127.0.0.1:${HA_MCP_PROXY_LISTEN} -> ${HA_MCP_PROXY_TARGET}:${HA_MCP_PROXY_TPORT}..."
+    HA_MCP_PROXY_LISTEN="${HA_MCP_PROXY_LISTEN}" HA_MCP_PROXY_TARGET="${HA_MCP_PROXY_TARGET}" HA_MCP_PROXY_TPORT="${HA_MCP_PROXY_TPORT}" \
+        node /data/dsh/ha-mcp-proxy.js &
+    HA_MCP_PROXY_PID=$!
+else
+    echo "[DSH Addon] WARNING: /data/dsh/ha-mcp-proxy.js not found; HA MCP local proxy not started"
+fi
+
 # ===== 启动桥接 API（deepseek_harness 集成依赖此稳定契约）=====
 echo "[DSH Addon] Starting bridge API on 0.0.0.0:${API_PORT}..."
 node /api_server.js &
@@ -695,6 +718,13 @@ while kill -0 ${DSH_PID} 2>/dev/null; do
         echo "[DSH Addon] WARNING: proxy died, respawning..."
         node /proxy.js &
         PROXY_PID=$!
+    fi
+    # 检查 HA MCP 本地代理是否还在运行
+    if [ -n "${HA_MCP_PROXY_PID}" ] && ! kill -0 ${HA_MCP_PROXY_PID} 2>/dev/null; then
+        echo "[DSH Addon] WARNING: HA MCP local proxy died, respawning..."
+        HA_MCP_PROXY_LISTEN="${HA_MCP_PROXY_LISTEN:-8124}" HA_MCP_PROXY_TARGET="${HA_MCP_PROXY_TARGET:-homeassistant}" HA_MCP_PROXY_TPORT="${HA_MCP_PROXY_TPORT:-8123}" \
+            node /data/dsh/ha-mcp-proxy.js &
+        HA_MCP_PROXY_PID=$!
     fi
     # 检查 bridge API 是否还在运行
     if ! kill -0 ${API_PID} 2>/dev/null; then
