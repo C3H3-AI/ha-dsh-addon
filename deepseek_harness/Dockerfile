@@ -55,6 +55,7 @@ RUN rm -rf /data/dsh/vendor /data/dsh/vendor.tmp /data/dsh/vendor.old \
 COPY run.sh /run.sh
 COPY proxy.js /proxy.js
 COPY api_server.js /api_server.js
+COPY ha-mcp-proxy.js /ha-mcp-proxy.js
 RUN chmod a+x /run.sh
 
 # 拷贝 HA 自定义集成（custom_components）
