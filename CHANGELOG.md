@@ -2,6 +2,13 @@
 
 本 addon 的版本变更记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.28] - 2026-08-27
+
+### 修复
+
+- **proxy.js — React 创建的 `<iframe>` 加载失败**：`dsh-mcp-connector` 的 iframe 由 React/JSX 创建，其 `src` 通过 `Element.setAttribute("src", ...)` 设置，**不会触发** `HTMLIFrameElement.prototype.src` 的 setter。此前只 hook 了 src setter，导致 React 创建的 iframe 仍以不带 Ingress 前缀的绝对路径加载而返回 404。
+  - 现新增 hook `Element.prototype.setAttribute`：当以 `src` 属性设置时同样补上 Ingress 前缀，彻底修复 MCP 连接器页面 404 的问题。
+
 ## [0.2.27] - 2026-08-27
 
 ### 修复
