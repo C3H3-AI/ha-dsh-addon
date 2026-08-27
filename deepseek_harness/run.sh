@@ -627,6 +627,55 @@ curl -s -X POST http://127.0.0.1:3081/api/settings.mutate \
 # 与 TCP 代理不同，HTTP 代理能检测 X-Ingress-Path 头部并注入 <base> 标签
 # 解决 SPA 绝对路径在 HA Ingress 下无法加载 JS/CSS 的问题
 # 代理代码写入单独文件，避免 inline node -e 的 shell 引号转义问题
+# ===== 幂等修复 proxy.js 的 HA Ingress 兼容（重启/重建后镜像会还原 proxy.js，此段确保修复始终生效）=====
+# 背景：/proxy.js 是镜像内置文件，容器重建会被还原成原始版本，导致以下问题复发：
+#   - dsh-better-sidebar 的 /sidebar/bundle/*.js 懒加载 chunk 在 HA Ingress 下 404/403
+#   - dsh-mcp-connector 的 iframe (/mcp-connector/ui/) 因绝对路径不带前缀而 404
+#   - WebSocket (wss://) 因 origin 协议与页面 https:// 不同被误判为跨源而跳过前缀
+# 修复方式：维护一份"已知正确"的 proxy.js 到持久化目录（/data/dsh/proxy.fixed.js），
+# 每次启动 proxy 前，若 /proxy.js 缺失修复标记（HTMLIFrameElement hook），则用正确版本覆盖。
+# 幂等：已是修复版则跳过。
+node << 'NODEPROXYFIX'
+const fs = require('fs');
+const path = require('path');
+const TARGET = '/proxy.js';
+const BACKUP_DIR = '/data/dsh';
+const FIXED = path.join(BACKUP_DIR, 'proxy.fixed.js');
+const DSH_HOME = process.env.DSH_HOME || '/data/dsh';
+
+function hasFix(src) {
+  // 判定 proxy.js 是否已含全部修复标记
+  const hasOriginFix = src.indexOf('u.origin !== ORIGIN') === -1;            // 旧的 origin 比较已移除
+  const hasIframeHook = src.indexOf('HTMLIFrameElement') !== -1;             // iframe hook 存在
+  const hasScriptHook = src.indexOf('HTMLScriptElement') !== -1;             // script hook 存在
+  return hasOriginFix && hasIframeHook && hasScriptHook;
+}
+
+// 若持久化目录没有正确版本，尝试从当前（可能已修复的）/proxy.js 建立基准
+if (!fs.existsSync(FIXED) && fs.existsSync(TARGET)) {
+  const cur = fs.readFileSync(TARGET, 'utf8');
+  if (hasFix(cur)) {
+    fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    fs.copyFileSync(TARGET, FIXED);
+    console.log('[DSH Addon]   established baseline proxy.fixed.js from current proxy.js');
+  }
+}
+
+// 若存在正确基准版本，且 /proxy.js 未修复，则覆盖
+if (fs.existsSync(FIXED)) {
+  const fixedSrc = fs.readFileSync(FIXED, 'utf8');
+  const targetExists = fs.existsSync(TARGET);
+  const targetSrc = targetExists ? fs.readFileSync(TARGET, 'utf8') : '';
+  if (!targetExists || !hasFix(targetSrc)) {
+    fs.copyFileSync(FIXED, TARGET);
+    console.log('[DSH Addon]   proxy.js restored to HA Ingress-fixed version from /data/dsh/proxy.fixed.js');
+  } else {
+    console.log('[DSH Addon]   proxy.js already has HA Ingress fixes (skipped)');
+  }
+} else {
+  console.log('[DSH Addon]   WARNING: no proxy.fixed.js baseline found; proxy.js left as-is');
+}
+NODEPROXYFIX
 echo "[DSH Addon] Starting HTTP proxy on 0.0.0.0:3080 -> 127.0.0.1:3081..."
 node /proxy.js &
 PROXY_PID=$!
