@@ -1,5 +1,34 @@
 # ha-dsh-addon
 
+[![HA][ha-badge]][ha-url]
+[![HACS][hacs-badge]][hacs-url]
+[![GitHub stars][stars-badge]][stars-url]
+[![GitHub forks][forks-badge]][forks-url]
+[![GitHub issues][issues-badge]][issues-url]
+[![License: MIT][license-badge]][license-url]
+[![Last commit][last-commit-badge]][last-commit-url]
+[![addon v][addon-badge]][addon-url]
+[![integration v][integration-badge]][integration-url]
+
+[ha-badge]: https://img.shields.io/badge/Home%20Assistant-18BCF2.svg?style=flat-square&logo=home-assistant&logoColor=white
+[ha-url]: https://www.home-assistant.io/
+[hacs-badge]: https://img.shields.io/badge/HACS-Custom-41BDF5.svg?style=flat-square
+[hacs-url]: https://hacs.xyz/
+[stars-badge]: https://img.shields.io/github/stars/C3H3-AI/ha-dsh-addon.svg?style=flat-square
+[stars-url]: https://github.com/C3H3-AI/ha-dsh-addon/stargazers
+[forks-badge]: https://img.shields.io/github/forks/C3H3-AI/ha-dsh-addon.svg?style=flat-square
+[forks-url]: https://github.com/C3H3-AI/ha-dsh-addon/network
+[issues-badge]: https://img.shields.io/github/issues/C3H3-AI/ha-dsh-addon.svg?style=flat-square
+[issues-url]: https://github.com/C3H3-AI/ha-dsh-addon/issues
+[license-badge]: https://img.shields.io/github/license/C3H3-AI/ha-dsh-addon.svg?style=flat-square
+[license-url]: https://github.com/C3H3-AI/ha-dsh-addon/blob/main/LICENSE
+[last-commit-badge]: https://img.shields.io/github/last-commit/C3H3-AI/ha-dsh-addon.svg?style=flat-square
+[last-commit-url]: https://github.com/C3H3-AI/ha-dsh-addon/commits/main
+[addon-badge]: https://img.shields.io/badge/addon-0.2.26-4E9AEE.svg?style=flat-square
+[addon-url]: https://github.com/C3H3-AI/ha-dsh-addon/blob/main/deepseek_harness/config.yaml
+[integration-badge]: https://img.shields.io/badge/integration-0.2.0-4E9AEE.svg?style=flat-square
+[integration-url]: https://github.com/C3H3-AI/ha-dsh-addon/blob/main/custom_components/deepseek_harness/manifest.json
+
 将 **DeepSeek Harness（DSH）** —— 上游开源的 AI Agent 运行框架（"一切皆插件"）—— 封装为 Home Assistant Addon。
 
 - 通过 HA Ingress 访问 DSH Web UI（无需额外端口暴露）
@@ -65,6 +94,12 @@ DSH 处于测试期（rc.x），更新频繁。本 addon 提供 Web 一键更新
 |------|------|
 | `latest` | npm 稳定 tag（当前 rc.7） |
 | `next` | npm 预发布 tag（当前 rc.8），一键更新默认目标 |
+
+## 变更日志
+
+### 0.2.x
+
+- 🐛 **修复**：桥接 API `sendJson` 幂等化，杜绝 `/api/status`、`/api/restart` 在 DSH Web 响应超时时因 `timeout` + `error` 双回调二次 `writeHead` 触发 `ERR_HTTP_HEADERS_SENT` 导致的桥接进程崩溃（日志曾见 `WARNING: bridge API died, respawning...`）。
 
 ## 开发
 

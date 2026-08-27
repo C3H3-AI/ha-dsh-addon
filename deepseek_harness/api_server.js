@@ -47,7 +47,11 @@ function tokenMatches(header) {
   return diff === 0;
 }
 
+// 幂等发送：同一响应只能写出一次。
+// 避免 handleStatus/handleRestart 中多个回调（timeout+error / response+error）
+// 竞态触发二次 writeHead 导致 ERR_HTTP_HEADERS_SENT 崩溃。
 function sendJson(res, code, obj) {
+  if (res.writableEnded) return; // 已发送过，忽略后续（先到先得）
   const body = JSON.stringify(obj);
   res.writeHead(code, {
     'Content-Type': 'application/json; charset=utf-8',
