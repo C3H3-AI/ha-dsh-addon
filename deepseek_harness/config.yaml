@@ -1,8 +1,8 @@
 name: "DeepSeek Harness"
 version: "0.2.27"
 slug: "deepseek_harness"
-description: "DeepSeek Harness - 开源 AI Agent 运行框架，一切皆插件"
-url: "https://github.com/deepseek-ai/deepseek-harness"
+description: "DeepSeek Harness Home Assistant 加载项 - 在 HA 中运行开源 AI Agent 框架，一切皆插件"
+url: "https://github.com/C3H3-AI/ha-dsh-addon"
 arch:
   - aarch64
   - amd64
