@@ -118,7 +118,7 @@ const server = http.createServer((req, res) => {
     // 关键：DSH 后端通过 isTrustedApiRequest 检查请求合法性：
     //   1. Host 头部必须是 loopback (127.0.0.1/localhost) 或 trustedHosts
     //   2. Origin 头部（如果有）必须与 Host 的 host 部分匹配
-    // 代理从浏览器收到的是 Host: api.homediy.top:8443, Origin: https://api.homediy.top:8443
+    // 代理从浏览器收到的是 Host: <外部反代域名>:<port>, Origin: https://<外部反代域名>
     // 必须覆盖为 DSH 实际地址，否则 origin.host !== host -> 403
     // Node.js http.request 会自动从 hostname + port 生成正确的 Host header
     // origin 需要显式设置
@@ -154,7 +154,7 @@ const server = http.createServer((req, res) => {
         //   - isLoopback=true  -> SettingsScopeController(api, spec, "host")  -> 设置通过 RPC 存到后端 settings.yaml
         //   - isLoopback=false -> 使用 "memory"，所有设置、弹窗状态、语言选择一律不保存（刷新即丢）
         // isLoopback 由前端 pageLocation.hostname 判断（client.js: isLoopbackHostname(...)）。
-        // 在 HA Ingress 下 hostname 是外部域名（如 api.homediy.top），永远判定为非 loopback。
+        // 在 HA Ingress 下 hostname 是外部反代/Ingress 域名，永远判定为非 loopback。
         // 注入脚本覆盖 Location.prototype.hostname 因浏览器不可配置(Non-configurable)而失效。
         // 因此这里在代理层直接改写该插件模块源码：把 isLoopback 计算替换为常量 true。
         if (pathOnly.endsWith('/plugins/@deepseek-ai/dsh-client-connection/client.js') &&
@@ -377,7 +377,7 @@ const server = http.createServer((req, res) => {
                 // DSH 通过检查 location.hostname 判断是否为回环地址：
                 //   - 是回环地址 → isLoopback = true → 持久化到后端（可保存）
                 //   - 非回环地址 → isLoopback = false → 仅存内存（刷新丢失）
-                // HA Ingress 的 hostname 是 api.homediy.top，不是回环地址
+                // HA Ingress 的 hostname 是外部反代域名，不是回环地址
                 // 所以：弹窗状态、语言设置等所有配置都存不住
                 // 修复：在 DSH 客户端模块加载前，劫持 hostname 返回 127.0.0.1
                 //
@@ -658,7 +658,7 @@ server.on('upgrade', (req, socket, head) => {
             //   2. Origin（如果有）必须与 Host 的 host 部分一致
             // 覆盖 Host 头部为 DSH 实际地址
             if (key.toLowerCase() === 'host') { value = '127.0.0.1:' + DSH_PORT; }
-            // 覆盖 Origin 头部为 DSH 实际地址，否则浏览器发送的 Origin: https://api.homediy.top:8443
+            // 覆盖 Origin 头部为 DSH 实际地址，否则浏览器发送的 Origin: https://<外部反代域名>
             // 与 Host: 127.0.0.1:3081 不匹配，导致 403
             if (key.toLowerCase() === 'origin') { value = 'http://127.0.0.1:' + DSH_PORT; }
             upgradeReq += key + ': ' + value + '\r\n';
