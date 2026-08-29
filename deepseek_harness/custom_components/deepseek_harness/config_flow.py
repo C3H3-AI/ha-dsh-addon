@@ -43,3 +43,25 @@ class DeepseekConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="user", data_schema=data_schema, errors=errors
         )
+
+    async def async_step_reconfigure(self, user_input=None) -> FlowResult:
+        """Handle reconfiguration from the HA UI."""
+        entry = self._get_reconfigure_entry()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            return self.async_update_reconfigure_and_continue(
+                data=user_input,
+                title=f"DeepSeek Harness ({user_input[CONF_HOST]})",
+            )
+
+        data_schema = vol.Schema(
+            {
+                vol.Required(CONF_HOST, default=entry.data.get(CONF_HOST, DEFAULT_HOST)): str,
+                vol.Required(CONF_PORT, default=entry.data.get(CONF_PORT, DEFAULT_PORT)): int,
+                vol.Required(CONF_TIMEOUT, default=entry.data.get(CONF_TIMEOUT, DEFAULT_TIMEOUT)): int,
+                vol.Optional(CONF_API_TOKEN, default=entry.data.get(CONF_API_TOKEN, "")): str,
+            }
+        )
+        return self.async_show_form(
+            step_id="reconfigure", data_schema=data_schema, errors=errors
+        )

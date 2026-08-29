@@ -23,7 +23,7 @@ Home Assistant Core
 ## 安装
 
 1. 安装并启动 `ha-dsh-addon`（DeepSeek Harness add-on），在 add-on 配置里填 API Key / 模型。
-2. HACS → 自定义仓库 → 添加 `https://github.com/duola/deepseek_harness`（类型：集成）。
+2. HACS → 自定义仓库 → 添加 `https://github.com/C3H3-AI/ha-dsh-addon`（类型：集成）。
 3. 设置 → 设备与服务 → 添加集成 → 搜索 **DeepSeek Harness** → 填 add-on 主机名（默认 `deepseek_harness`）和端口（默认 `3082`）。
 4. 设置 → 语音助手 → 把默认对话代理切到 **DeepSeek Harness**，即可用语音 / 文字对话。
 

@@ -8,12 +8,19 @@
  * volatile RC internals directly; it only calls this contract:
  *
  *   POST /api/chat    { message, session? }  -> { text }
+ *   POST /api/session { message, session? }  -> { text, sessionId }
  *   GET  /api/status                          -> { online, ... }
  *   POST /api/restart                         -> { ok }
  *
  * /api/chat drives DSH through `dsh --profile headless`, the stable
- * one-shot agent runner. Multi-turn session relay (via the web profile's
- * WebSocket) is a later upgrade that stays inside this file.
+ * one-shot agent runner.
+ *
+ * /api/session is the multi-turn session relay (path A): it talks to the
+ * running web profile's Typert Remote RPC surface at 127.0.0.1:3081 over
+ * plain HTTP POST /api/<endpoint> (session.create / session.list /
+ * session.history / session.prompt), so the HA conversation keeps real
+ * memory across turns and the reply streams back. The `sessionId` returned
+ * is used as the HA conversation_id.
  */
 
 const http = require('http');
@@ -105,6 +112,187 @@ function runHeadless(message, timeoutMs = CHAT_TIMEOUT_MS) {
       }
     });
   });
+}
+
+// ---- 多轮会话中继（path A：DSH web 的 Typert Remote RPC）----
+// 直接向运行中的 web profile（127.0.0.1:3081）发起 session 类 RPC。
+// 无鉴权（本部署 web profile 未强制浏览器 cookie 认证，且走 loopback 通过
+// Host/Origin 围栏）。请求/响应包络与 DSH 浏览器客户端一致：
+//   请求 {type:'client-request', rpcId, method, payload}
+//   响应 {type:'server-response', rpcId, result:{ok, value|error}}
+const DSH_WEB_ORIGIN = 'http://127.0.0.1:' + DSH_WEB_PORT;
+
+// 单次 DSH web RPC 调用。rpcId 可选，供 session.prompt 用作文本流关联键。
+async function dshRpc(method, payload, rpcId) {
+  const res = await fetch(DSH_WEB_ORIGIN + '/api/' + method, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      type: 'client-request',
+      rpcId: rpcId || 'dsh-bridge-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
+      method,
+      payload,
+    }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!res.ok) {
+    throw new Error('DSH web ' + method + ' 返回 HTTP ' + res.status);
+  }
+  const body = await res.json();
+  if (body?.result?.ok !== true) {
+    const err = body?.result?.error ?? {};
+    const e = new Error((err.message || '未知错误'));
+    e.code = err.code || 'rpc-failed';
+    e.details = err.details || {};
+    throw e;
+  }
+  return body.result.value;
+}
+
+// 取一个会话的历史事件基线 seq（避免把历史助手消息误当本次回复）
+async function sessionBaselineSeq(sessionId) {
+  const before = await dshRpc('session.history', { sessionId, maxMessages: 1 });
+  return Math.max(-1, ...(before.events ?? []).map((e) => e.event?.seq ?? -1));
+}
+
+// 挑选或创建会话：有 session 则沿用；否则选最近活跃的非空白会话；再没有就新建。
+async function resolveSession(sessionId) {
+  if (typeof sessionId === 'string' && sessionId) {
+    try {
+      await dshRpc('session.history', { sessionId, maxMessages: 1 });
+      return sessionId; // 存在则沿用
+    } catch {
+      // session-not-found 或已失效 -> 落到新建
+    }
+  }
+  try {
+    const list = await dshRpc('session.list', {});
+    const items = list?.items ?? [];
+    // 优先非空白、非 running 的最近会话（updatedAt 降序）
+    const candidate = items
+      .filter((it) => it && it.sessionId && it.blank !== true && it.running !== true)
+      .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))[0];
+    if (candidate) return candidate.sessionId;
+  } catch {
+    // list 失败则直接新建
+  }
+  const created = await dshRpc('session.create', {});
+  return created.sessionId;
+}
+
+// 从一条会话事件里抽取助手文本（assistant/message 的 content 中的 text 段）
+function assistantText(ev) {
+  return (ev?.data?.message?.content ?? [])
+    .filter((p) => p.type === 'text' && typeof p.text === 'string')
+    .map((p) => p.text)
+    .join('\n')
+    .trim();
+}
+
+// 多轮中继：prompt 后轮询 session.history，按 promptRpcId 关联并累计助手文本，
+// 到 turn/end 结束。超时抛错。
+async function relaySession(message, sessionId, timeoutMs = 120_000) {
+  const baselineSeq = await sessionBaselineSeq(sessionId);
+  const promptRpcId = 'dsh-bridge-prompt-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+
+  await dshRpc('session.prompt', {
+    sessionId,
+    mode: 'queue',
+    content: [{ type: 'text', text: message }],
+    clientTimeZone: 'Asia/Shanghai',
+  }, promptRpcId);
+
+  const tracker = {
+    promptRpcId,
+    lastSeq: baselineSeq,
+    openTurn: null,
+    targetTurn: null,
+    stepText: new Map(),
+    finished: false,
+    text: '',
+  };
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline && !tracker.finished) {
+    await sleep(400);
+    let hist;
+    try {
+      hist = await dshRpc('session.history', { sessionId, maxMessages: 100 });
+    } catch (e) {
+      // 轮询瞬时失败则继续，直到超时
+      continue;
+    }
+    const events = (hist.events ?? [])
+      .map((e) => e.event)
+      .filter(Boolean)
+      .sort((a, b) => (a.seq ?? -1) - (b.seq ?? -1));
+    for (const ev of events) {
+      const seq = ev.seq ?? -1;
+      if (seq <= tracker.lastSeq) continue;
+      tracker.lastSeq = seq;
+      if (ev.type === 'turn/start') { tracker.openTurn = ev.data?.turn ?? null; continue; }
+      if (ev.type === 'user/message' && ev.data?.source?.rpcId === tracker.promptRpcId) {
+        tracker.targetTurn = tracker.openTurn;
+        continue;
+      }
+      if (tracker.targetTurn === null) continue;
+      if (ev.type === 'turn/end' && ev.data?.turn === tracker.targetTurn) {
+        tracker.finished = true;
+        break;
+      }
+      if (ev.data?.turn !== tracker.targetTurn) continue;
+      if (ev.type === 'assistant/chunk' && ev.data?.chunk?.type === 'text-delta') {
+        const step = ev.data?.step ?? 0;
+        const idx = ev.data.chunk.index ?? 0;
+        const key = step + ':' + idx;
+        tracker.stepText.set(key, (tracker.stepText.get(key) ?? '') + ev.data.chunk.text);
+        const text = [...tracker.stepText.entries()]
+          .filter(([k]) => k.startsWith(step + ':'))
+          .sort(([a], [b]) => Number(a.split(':')[1]) - Number(b.split(':')[1]))
+          .map(([, v]) => v)
+          .join('\n')
+          .trim();
+        if (text && text !== tracker.text) tracker.text = text;
+      } else if (ev.type === 'assistant/message') {
+        const t = assistantText(ev);
+        if (t && t !== tracker.text) tracker.text = t;
+      }
+    }
+  }
+  if (!tracker.finished) {
+    throw new Error('DSH 会话回复超时（' + Math.round(timeoutMs / 1000) + 's）');
+  }
+  return tracker.text;
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+let sessionRelayInFlight = false;
+
+async function handleSession(req, res) {
+  // 单飞锁：同一时间只允许 1 个会话中继
+  if (sessionRelayInFlight) {
+    sendJson(res, 429, { text: 'DSH 正在处理上一条会话请求，请稍后再试', sessionId: null });
+    return;
+  }
+  sessionRelayInFlight = true;
+  try {
+    const raw = await readBody(req);
+    const body = raw ? JSON.parse(raw) : {};
+    const message = (body.message || '').toString();
+    if (!message) {
+      sendJson(res, 400, { text: '缺少 message 字段', sessionId: null });
+      return;
+    }
+    const sessionId = await resolveSession(body.session);
+    const text = await relaySession(message, sessionId);
+    sendJson(res, 200, { text, sessionId });
+  } catch (e) {
+    sendJson(res, 502, { text: 'DSH 会话调用失败: ' + e.message, sessionId: null });
+  } finally {
+    sessionRelayInFlight = false;
+  }
 }
 
 async function handleChat(req, res) {
@@ -360,6 +548,7 @@ const server = http.createServer((req, res) => {
   }
   if (req.method === 'POST' && req.url === '/api/update') return handleUpdate(req, res);
   if (req.method === 'POST' && req.url === '/api/chat') return handleChat(req, res);
+  if (req.method === 'POST' && req.url === '/api/session') return handleSession(req, res);
   if (req.method === 'POST' && req.url === '/api/restart') return handleRestart(req, res);
   sendJson(res, 404, { error: 'not found' });
 });

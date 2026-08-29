@@ -58,15 +58,21 @@ class DeepseekConversationAgent(
     ) -> conversation.ConversationResult:
         """Process a single Assist turn by forwarding it to DSH."""
         client: DSHClient = self.hass.data[DOMAIN][self.entry.entry_id]["client"]
+        # 多轮会话：conversation_id 即 DSH sessionId，跨轮保留上下文。
+        # 首轮 conversation_id 为空，add-on 会新建/复用会话并回传 sessionId，
+        # 作为后续轮次的 conversation_id。
         try:
-            text = await client.chat(user_input.text, user_input.conversation_id)
+            text, session_id = await client.chat_session(
+                user_input.text, user_input.conversation_id
+            )
         except DSHClientError as err:
-            _LOGGER.warning("DSH chat failed: %s", err)
+            _LOGGER.warning("DSH session chat failed: %s", err)
             text = f"抱歉，DeepSeek Harness 暂时无法响应：{err}"
+            session_id = user_input.conversation_id
 
         response = intent.IntentResponse(language=user_input.language)
         response.async_set_speech(text)
         return conversation.result(
             response=response,
-            conversation_id=user_input.conversation_id,
+            conversation_id=session_id or user_input.conversation_id,
         )

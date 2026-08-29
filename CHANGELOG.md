@@ -2,7 +2,20 @@
 
 本 addon 的版本变更记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.30] - 2026-08-29
+
+### 新增
+
+- **多轮会话中继（path A）— 新增 `POST /api/session`**：addon 桥接 API 直接对接 DSH web 的 Typert Remote RPC 面（`session.create` / `session.list` / `session.history` / `session.prompt`，走 127.0.0.1:3081 的 `/api/<endpoint>`）。HA 对话跨轮保留真实上下文：`sessionId` 作为 HA 的 `conversation_id`，回复通过轮询 `session.history` 按 `rpcId` 关联并累计 `assistant/chunk` 文本，`turn/end` 时返回。
+- **集成改用 `chat_session`**：`conversation.py` 通过 `/api/session` 走多轮会话，首次调用返回 `sessionId` 作为后续轮次 conversation_id；`dsh_client.py` 新增 `chat_session(message, session_id)`。
+- **`_detect_addon_host`**：集成启动时经 Supervisor API 自动探测真实 addon hostname，解决第三方仓库 slug 前缀不一致导致的默认主机名解析失败。
+
+### 修复
+
+- **`manifest.json` 维护人 `@duola` → `@C3H3-AI`**；集成版本 0.2.1，支持 UI 重新配置（`reconfigure`）。
+
 ## [0.2.29] - 2026-08-29
+
 
 ### 移除
 
