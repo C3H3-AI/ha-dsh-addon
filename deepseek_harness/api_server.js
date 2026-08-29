@@ -168,13 +168,54 @@ async function resolveSession(sessionId) {
   if (typeof sessionId === 'string' && sessionId) {
     try {
       await dshRpc('session.history', { sessionId, maxMessages: 1 });
+      // 会话存在。若它是游离的（未注册到 workspace），补注册，
+      // 让它出现在 DSH UI 的会话树里（见 sessionCreatePayload 的说明）。
+      await ensureWorkspaceRegistered(sessionId);
       return sessionId; // 存在则沿用
     } catch {
       // session-not-found 或已失效 -> 落到新建
     }
   }
-  const created = await dshRpc('session.create', {});
+  const created = await dshRpc('session.create', await sessionCreatePayload());
   return created.sessionId;
+}
+
+// 把一个已存在但未挂到 workspace 的会话补注册进去（dsh-im 的 adopt 思路）：
+// session.create({ workspaceId, sessionId }) 在会话已存在时表现为"认领"，
+// 返回的 sessionId 与传入一致。已注册过则直接跳过。
+async function ensureWorkspaceRegistered(sessionId) {
+  try {
+    const list = await dshRpc('workspace.list', {});
+    const items = list?.items ?? [];
+    const owner = items.find((w) => Array.isArray(w?.sessionIds) && w.sessionIds.includes(sessionId));
+    if (owner) return; // 已注册
+    const target = items.find((w) => w && typeof w.workspaceId === 'string' && w.workspaceId);
+    if (!target) return;
+    const adopted = await dshRpc('session.create', { workspaceId: target.workspaceId, sessionId });
+    if (adopted?.sessionId !== sessionId) {
+      console.warn('[DSH Addon] session adopt mismatch for ' + sessionId);
+    }
+  } catch (e) {
+    // 补注册失败不阻断对话，仅记录
+    console.warn('[DSH Addon] session adopt failed: ' + e.message);
+  }
+}
+
+// 新会话必须注册到某个 workspace，否则 DSH 的会话树（按 workspace 分组渲染）
+// 不会显示它 —— 表现为"HA 发的对话在 DSH UI 里看不到"。
+// dsh-im 的 adoptRegisteredWorkspaceSession 正是用 workspaceId + sessionId
+// 调 session.create 来把会话挂到工作区。这里沿用同一做法：
+//   1) workspace.list 取工作区；2) 带 workspaceId 建会话。
+// 取不到 workspace（例如尚未初始化）时退回无参创建，保证链路不中断。
+async function sessionCreatePayload() {
+  try {
+    const list = await dshRpc('workspace.list', {});
+    const first = (list?.items ?? []).find((w) => w && typeof w.workspaceId === 'string' && w.workspaceId);
+    if (first) return { workspaceId: first.workspaceId };
+  } catch {
+    // workspace.list 不可用 -> 退回无参创建
+  }
+  return {};
 }
 
 // 从一条会话事件里抽取助手文本（assistant/message 的 content 中的 text 段）
