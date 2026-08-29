@@ -2,7 +2,32 @@
 
 本 addon 的版本变更记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.31] - 2026-08-29
+
+### 新增
+
+- **多轮会话中继 `POST /api/session`（path A）**：addon 桥接层直接对接 DSH web profile（127.0.0.1:3081）的
+  Typert Remote RPC（`session.create` / `session.list` / `session.history` / `session.prompt`，
+  走 `POST /api/<endpoint>`）。`sessionId` 作为 HA 的 `conversation_id`，跨轮保留真实会话上下文。
+  集成侧 `conversation.py` 改用 `chat_session()`，`dsh_client.py` 新增该方法。
+
+### 修复
+
+- **限流（"请求太频繁，AI 服务限流中"）**：新对话（无 conversation_id）此前会复用"最近活跃的其它会话"，
+  导致所有 HA 对话被追加进同一个臃肿会话（实测 22 轮 / ~105K token / 4.15M cache-read token），
+  每次请求重放巨大上下文触发 LLM provider 限流。现改为：conversation_id 存在则沿用，否则一律新建会话。
+- **HA 对话在 DSH UI 里看不到**：DSH 的会话树按 workspace 分组渲染，而此前用 `session.create({})`
+  建的会话未注册到任何 workspace（游离会话），因此 UI 不显示。沿用 dsh-im 的
+  `adoptRegisteredWorkspaceSession` 思路修复：
+  - `sessionCreatePayload()`：经 `workspace.list` 取 `workspaceId`，带它创建会话；
+  - `ensureWorkspaceRegistered(id)`：对游离的既有会话，用
+    `session.create({ workspaceId, sessionId })` 补认领（幂等）。
+- **`conversation.py` HA 2026.x 兼容性**：HA 2026.8 移除了 `conversation.result()` 辅助函数，
+  改为返回 `conversation.ConversationResult(...)`（dataclass），否则调用返回 500。
+- 维护人 `@duola` → `@C3H3-AI`；集成 README 仓库地址修正。
+
 ## [0.2.30] - 2026-08-29
+
 
 ### 新增
 

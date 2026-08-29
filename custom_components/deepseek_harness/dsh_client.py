@@ -1,9 +1,14 @@
 """HTTP client bridging Home Assistant to the DeepSeek Harness add-on API.
 
 The add-on (ha-dsh-addon) exposes a small, stable HTTP API
-(``/api/chat``, ``/api/status``, ``/api/restart``) that wraps the volatile
-DSH runtime. This client only depends on that stable contract, so upstream
-DSH breaking changes only require updating the add-on, never this component.
+(``/api/chat``, ``/api/session``, ``/api/status``, ``/api/restart``) that
+wraps the volatile DSH runtime. This client only depends on that stable
+contract, so upstream DSH breaking changes only require updating the add-on,
+never this component.
+
+``chat`` walks the headless one-shot runner (no memory); ``chat_session``
+uses the multi-turn session relay (/api/session), keeping the DSH sessionId
+as the HA conversation_id so context survives across turns.
 """
 
 from __future__ import annotations
@@ -82,6 +87,43 @@ class DSHClient:
                         )
                     data = await resp.json()
                     return data.get("text", "")
+        except asyncio.TimeoutError as err:
+            raise DSHClientError("DSH 响应超时") from err
+        except aiohttp.ClientError as err:
+            raise DSHClientError(f"无法连接 DSH：{err}") from err
+
+    async def chat_session(
+        self,
+        message: str,
+        session_id: str | None = None,
+    ) -> tuple[str, str | None]:
+        """Send a message to a DSH session and return (text, sessionId).
+
+        ``session_id`` of None lets the add-on reuse/create a session and
+        returns the generated ``sessionId`` as the next turn conversation id.
+        """
+        session = await self._get_session()
+        payload: dict[str, Any] = {"message": message}
+        if session_id:
+            payload["session"] = session_id
+        try:
+            async with async_timeout.timeout(self._timeout):
+                async with session.post(
+                    f"{self._base_url}/api/session",
+                    json=payload,
+                    headers=self._headers(),
+                ) as resp:
+                    if resp.status != 200:
+                        body = await resp.text()
+                        if resp.status == 401:
+                            raise DSHClientError(
+                                "DSH 返回 401：API token 不匹配，请在 addon 与集成配置中填入相同的 api_token"
+                            )
+                        raise DSHClientError(
+                            f"DSH 返回 {resp.status}: {body[:200]}"
+                        )
+                    data = await resp.json()
+                    return data.get("text", ""), data.get("sessionId")
         except asyncio.TimeoutError as err:
             raise DSHClientError("DSH 响应超时") from err
         except aiohttp.ClientError as err:

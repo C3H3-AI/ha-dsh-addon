@@ -1,4 +1,4 @@
-ARG BUILD_VERSION="0.2.28"
+ARG BUILD_VERSION="0.2.31"
 ARG BUILD_ARCH="aarch64"
 ARG BUILD_FROM="node:22-bookworm-slim"
 

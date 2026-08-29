@@ -24,9 +24,9 @@
 [license-url]: https://github.com/C3H3-AI/ha-dsh-addon/blob/main/LICENSE
 [last-commit-badge]: https://img.shields.io/github/last-commit/C3H3-AI/ha-dsh-addon.svg?style=flat-square
 [last-commit-url]: https://github.com/C3H3-AI/ha-dsh-addon/commits/main
-[addon-badge]: https://img.shields.io/badge/addon-0.2.26-4E9AEE.svg?style=flat-square
+[addon-badge]: https://img.shields.io/badge/addon-0.2.31-4E9AEE.svg?style=flat-square
 [addon-url]: https://github.com/C3H3-AI/ha-dsh-addon/blob/main/deepseek_harness/config.yaml
-[integration-badge]: https://img.shields.io/badge/integration-0.2.0-4E9AEE.svg?style=flat-square
+[integration-badge]: https://img.shields.io/badge/integration-0.2.2-4E9AEE.svg?style=flat-square
 [integration-url]: https://github.com/C3H3-AI/ha-dsh-addon/blob/main/custom_components/deepseek_harness/manifest.json
 
 将 **DeepSeek Harness（DSH）** —— 上游开源的 AI Agent 运行框架（"一切皆插件"）—— 封装为 Home Assistant Addon。
@@ -35,6 +35,7 @@
 - 内置桥接 API（`deepseek_harness` 自定义集成依赖此稳定契约）
 - 可选接入 HA 原生 MCP Server，让 DSH 控制家里设备
 - **Web 一键更新**：DSH 更新到上游最新版，无需重新发布 addon
+- **多轮会话中继**：HA 对话接进 DSH Agent 真实会话，跨轮保留上下文
 
 ## 快速开始
 
@@ -56,7 +57,8 @@
                      │  (注入脚本 / 改写 host.describe)
 [桥接 API :3082] ◄── [deepseek_harness 集成]
     ├ GET  /api/status      (只读, 放行)
-    ├ POST /api/chat        (需 Bearer token, 60s 超时, 单飞并发锁)
+    ├ POST /api/session     (需 Bearer token, 多轮会话中继 —— 当前对话路径)
+    ├ POST /api/chat        (需 Bearer token, headless 一次性调用, 已不再使用)
     ├ POST /api/restart     (需 Bearer token)
     ├ GET  /api/update/status (需 Bearer token)
     └ POST /api/update      (需 Bearer token, 一键更新)
@@ -80,7 +82,7 @@ DSH 处于测试期（rc.x），更新频繁。本 addon 提供 Web 一键更新
 3. 点击 → 确认 → 自动：`npm install @deepseek-ai/dsh@next` 到 `/data/dsh/vendor` → 原子切换 → 容器重启
 
 - 更新后的 DSH 装在**持久化目录** `/data/dsh/vendor`，镜像内置版保留作离线兜底与回滚
-- addon 壳只依赖 DSH 稳定契约（headless CLI 的 argv+stdout），上游接口不变则 addon 无需更新
+- addon 壳依赖 DSH 的会话 RPC 契约（session.create / session.history / session.prompt）；契约变化时只改 addon 桥接层，HA 集成不动
 
 ## 数据备份
 
@@ -97,6 +99,12 @@ DSH 处于测试期（rc.x），更新频繁。本 addon 提供 Web 一键更新
 
 ## 变更日志
 
+### 0.2.31
+
+- ✨ **多轮会话中继 `POST /api/session`**：HA 对话接进 DSH Agent 真实会话，跨轮保留上下文。
+- 🐛 **修复限流**：新对话不再复用"最近活跃的其它会话"（曾导致所有对话堆积进一个 105K token 的臃肿会话而触发 LLM 限流），改为 conversation_id 有效则复用、否则新建。
+- 🐛 **修复 HA 对话在 DSH 界面不可见**：会话需注册到 workspace 才会被 DSH 会话树渲染；新建时带 `workspaceId`，游离会话用 `session.create({workspaceId, sessionId})` 补认领（沿用 dsh-im 思路）。
+- 🐛 **修复 HA 2026.8 兼容**：`conversation.result()` 已移除，改返回 `conversation.ConversationResult(...)`，否则调用返回 500。
 ### 0.2.x
 
 - 🐛 **修复**：桥接 API `sendJson` 幂等化，杜绝 `/api/status`、`/api/restart` 在 DSH Web 响应超时时因 `timeout` + `error` 双回调二次 `writeHead` 触发 `ERR_HTTP_HEADERS_SENT` 导致的桥接进程崩溃（日志曾见 `WARNING: bridge API died, respawning...`）。
@@ -106,7 +114,7 @@ DSH 处于测试期（rc.x），更新频繁。本 addon 提供 Web 一键更新
 详见 [docs/DESIGN.md](docs/DESIGN.md)（完整设计方案与关键决策记录）。
 
 - 本地测试：`node api_server.js`（需 `DSH_API_TOKEN` 环境变量）
-- 双轨版本号：addon 轨 `config.yaml` == `Dockerfile`（当前 `0.2.26`）；集成轨 `const.py` == `manifest.json`（当前 `0.2.0`）。两轨独立、不跨轨比较。CI 通过 `scripts/check-versions.sh` 校验各自一致。
+- 双轨版本号：addon 轨 `config.yaml` == `Dockerfile`（当前 `0.2.31`）；集成轨 `const.py` == `manifest.json`（当前 `0.2.2`）。两轨独立、不跨轨比较。CI 通过 `scripts/check-versions.sh` 校验各自一致。
 - 测试与 CI：桥接 API 契约测试在 `tests/`（随仓库提交），CI（`.github/workflows/ci.yml`）跑 lint + 版本校验 + 契约测试 + 镜像构建。
 
 ## License

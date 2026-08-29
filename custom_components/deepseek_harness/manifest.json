@@ -2,7 +2,7 @@
   "domain": "deepseek_harness",
   "name": "DeepSeek Harness",
   "after_dependencies": ["assist_pipeline"],
-  "codeowners": ["@duola"],
+  "codeowners": ["@C3H3-AI"],
   "config_flow": true,
   "dependencies": ["conversation", "http"],
   "documentation": "https://github.com/C3H3-AI/ha-dsh-addon",
@@ -10,5 +10,6 @@
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/C3H3-AI/ha-dsh-addon/issues",
   "single_config_entry": true,
-  "version": "0.2.0"
+  "version": "0.2.2",
+  "icon": "icon.png"
 }
