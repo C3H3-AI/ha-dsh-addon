@@ -116,10 +116,13 @@ function runHeadless(message, timeoutMs = CHAT_TIMEOUT_MS) {
 
 // ---- 多轮会话中继（path A：DSH web 的 Typert Remote RPC）----
 // 直接向运行中的 web profile（127.0.0.1:3081）发起 session 类 RPC。
-// 无鉴权（本部署 web profile 未强制浏览器 cookie 认证，且走 loopback 通过
-// Host/Origin 围栏）。请求/响应包络与 DSH 浏览器客户端一致：
+// 请求/响应包络与 DSH 浏览器客户端一致：
 //   请求 {type:'client-request', rpcId, method, payload}
 //   响应 {type:'server-response', rpcId, result:{ok, value|error}}
+// 说明：走 loopback（127.0.0.1）通过 DSH 的 Host/Origin 围栏；在 HA 部署里
+// DSH web 未强制浏览器 cookie 认证，因此无额外鉴权即可调用。若上游开启
+// 浏览器会话认证，此处需补充按 DSH cookie 格式（client-connection/browser-session）
+// 生成的 Cookie 头，改动限定在本文件。
 const DSH_WEB_ORIGIN = 'http://127.0.0.1:' + DSH_WEB_PORT;
 
 // 单次 DSH web RPC 调用。rpcId 可选，供 session.prompt 用作文本流关联键。
