@@ -2,6 +2,13 @@
 
 本 addon 的版本变更记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.29] - 2026-08-29
+
+### 移除
+
+- **proxy.js — 移除 `mobileCss` 移动端 CSS 注入**：移动端适配改由 `dsh-mobile-fix` 插件负责，代理不再注入移动端样式，避免与插件冲突。
+- **proxy.js — 移除 `updateUiScript` 一键更新 UI 注入**：不再往 DSH 设置页面注入版本/更新按钮。
+
 ## [0.2.28] - 2026-08-27
 
 ### 修复
