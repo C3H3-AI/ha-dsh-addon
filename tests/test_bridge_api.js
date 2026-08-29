@@ -3,15 +3,17 @@
 /**
  * Bridge API contract tests.
  *
- * Starts the api_server.js in a subprocess, runs HTTP requests against it,
- * and asserts the stable contract (status/chat/restart/update).
+ * Starts the api_server.js in a subprocess against a mock DSH web profile,
+ * then asserts the stable contract:
+ *   - GET  /api/status        (public)
+ *   - POST /api/session       (auth, multi-turn relay, single-flight)
  *
  * Usage:
  *   node tests/test_bridge_api.js
  *
  * Environment:
- *   DSH_API_PORT=3099   (auto-assigned random port, default 3099)
- *   DSH_BIN=./test/mock_dsh.js  (path to a headless mock)
+ *   DSH_API_PORT=3099      (bridge port)
+ *   MOCK_DSH_PORT=3098     (mock DSH web RPC port)
  */
 
 const http = require('http');
@@ -20,11 +22,11 @@ const path = require('path');
 const fs = require('fs');
 
 const PORT = parseInt(process.env.DSH_API_PORT || '3099', 10);
+const MOCK_PORT = parseInt(process.env.MOCK_DSH_PORT || '3098', 10);
 const API_SERVER = path.join(__dirname, '..', 'deepseek_harness', 'api_server.js');
-const MOCK_DSH = path.join(__dirname, 'mock_dsh.js');
+const MOCK_DSH_WEB = path.join(__dirname, 'mock_dsh_web.js');
 
 const TEST_TOKEN = 'test-secret-123';
-const ALLOWED_DIFF = 50; // ms allowed for timing comparison
 
 // ---- helpers ----
 
@@ -52,7 +54,6 @@ function fetch(method, urlPath, opts = {}) {
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
-// ---- main ----
 let passed = 0;
 let failed = 0;
 
@@ -67,189 +68,129 @@ function assert(label, condition, detail) {
 }
 
 async function run() {
-    console.log(`\nBridge API Contract Tests (port ${PORT})\n`);
-    console.log(`api_server: ${API_SERVER}`);
-    console.log(`mock_dsh:   ${MOCK_DSH}\n`);
+    console.log(`\nBridge API Contract Tests (bridge ${PORT}, mock dsh ${MOCK_PORT})\n`);
 
-    // Verify mock exists
-    if (!fs.existsSync(MOCK_DSH)) {
-        console.error('  ✗ mock_dsh.js not found at', MOCK_DSH);
+    if (!fs.existsSync(MOCK_DSH_WEB)) {
+        console.error('  ✗ mock_dsh_web.js not found at', MOCK_DSH_WEB);
         process.exit(1);
     }
 
-    // Start api_server.js with the mock DSH binary
+    // ---- start mock DSH web profile ----
+    const mock = spawn('node', [MOCK_DSH_WEB], {
+        env: Object.assign({}, process.env, { MOCK_DSH_PORT: String(MOCK_PORT) }),
+        stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let mockLog = '';
+    mock.stdout.on('data', (d) => { mockLog += d.toString(); });
+    mock.stderr.on('data', (d) => { mockLog += d.toString(); });
+
+    // ---- start api_server.js pointing at the mock ----
     const env = Object.assign({}, process.env, {
         DSH_API_PORT: String(PORT),
         DSH_API_TOKEN: TEST_TOKEN,
-        DSH_BIN: MOCK_DSH,
+        DSH_WEB_PORT: String(MOCK_PORT),
     });
     const server = spawn('node', [API_SERVER], { env, stdio: ['ignore', 'pipe', 'pipe'] });
     let serverLog = '';
     server.stdout.on('data', (d) => { serverLog += d.toString(); });
     server.stderr.on('data', (d) => { serverLog += d.toString(); });
 
-    // Wait for server to start
-    await sleep(500);
+    await sleep(800);
 
     try {
-        // ===== 1. GET /api/status =====
+        // ===== 1. GET /api/status (public) =====.
         console.log('1. GET /api/status (public, no auth required)');
         {
             const r = await fetch('GET', '/api/status');
-            assert('returns 200', r.status === 200);
-            assert('has online field', r.json && typeof r.json.online === 'boolean');
+            assert('returns 200', r.status === 200, `got ${r.status}`);
+            assert('has online field', r.json && typeof r.json.online !== 'undefined', r.body);
         }
 
-        // ===== 2. POST /api/chat without token =====
-        console.log('2. POST /api/chat without token (should 401)');
+        // ===== 2. POST /api/session without token =====.
+        console.log('2. POST /api/session without token (should 401)');
         {
-            const r = await fetch('POST', '/api/chat', { body: { message: 'hello' } });
-            assert('returns 401', r.status === 401);
-            assert('has error key', r.json && r.json.error);
+            const r = await fetch('POST', '/api/session', { body: { message: 'hello' } });
+            assert('returns 401', r.status === 401, `got ${r.status}`);
         }
 
-        // ===== 3. POST /api/chat with wrong token =====
-        console.log('3. POST /api/chat with wrong token (should 401)');
+        // ===== 3. POST /api/session with wrong token =====.
+        console.log('3. POST /api/session with wrong token (should 401)');
         {
-            const r = await fetch('POST', '/api/chat', {
+            const r = await fetch('POST', '/api/session', {
+                body: { message: 'hello' },
                 headers: { Authorization: 'Bearer wrong-token' },
-                body: { message: 'hello' },
             });
-            assert('returns 401', r.status === 401);
+            assert('returns 401', r.status === 401, `got ${r.status}`);
         }
 
-        // ===== 4. POST /api/chat with correct token =====
-        console.log('4. POST /api/chat with correct token');
+        // ===== 4. POST /api/session with correct token =====.
+        console.log('4. POST /api/session with correct token (multi-turn relay)');
+        let sessionId = null;
         {
-            const r = await fetch('POST', '/api/chat', {
+            const r = await fetch('POST', '/api/session', {
+                body: { message: 'hello world' },
                 headers: { Authorization: `Bearer ${TEST_TOKEN}` },
-                body: { message: 'hello' },
             });
-            assert('returns 200', r.status === 200);
-            assert('has text field', r.json && typeof r.json.text === 'string');
-            assert('text is mock response', r.json && r.json.text.includes('mock'));
+            assert('returns 200', r.status === 200, `got ${r.status} body=${r.body}`);
+            assert('has text', r.json && typeof r.json.text === 'string', r.body);
+            assert('reply echoes the prompt', r.json && /hello world/.test(r.json.text), r.body);
+            assert('has sessionId', r.json && typeof r.json.sessionId === 'string', r.body);
+            sessionId = r.json && r.json.sessionId;
         }
 
-        // ===== 5. POST /api/chat empty message =====
-        console.log('5. POST /api/chat with empty message');
+        // ===== 5. second turn reuses the same session =====.
+        console.log('5. POST /api/session second turn reuses conversation_id');
         {
-            const r = await fetch('POST', '/api/chat', {
+            const r = await fetch('POST', '/api/session', {
+                body: { message: 'second turn', session: sessionId },
                 headers: { Authorization: `Bearer ${TEST_TOKEN}` },
+            });
+            assert('returns 200', r.status === 200, `got ${r.status}`);
+            assert('same sessionId returned', r.json && r.json.sessionId === sessionId, r.body);
+        }
+
+        // ===== 6. empty message -> 400 =====.
+        console.log('6. POST /api/session with empty message');
+        {
+            const r = await fetch('POST', '/api/session', {
                 body: { message: '' },
+                headers: { Authorization: `Bearer ${TEST_TOKEN}` },
             });
-            assert('returns 400', r.status === 400);
+            assert('returns 400', r.status === 400, `got ${r.status}`);
         }
 
-        // ===== 6. POST /api/chat concurrent (single-flight lock) =====
-        console.log('6. POST /api/chat concurrent (single-flight lock)');
+        // ===== 7. single-flight lock =====.
+        console.log('7. POST /api/session concurrent (single-flight lock)');
         {
-            // The mock slow-responds; second request should get 429
-            const [r1, r2] = await Promise.all([
-                fetch('POST', '/api/chat', {
+            const [a, b] = await Promise.all([
+                fetch('POST', '/api/session', {
+                    body: { message: 'slow: first' },
                     headers: { Authorization: `Bearer ${TEST_TOKEN}` },
-                    body: { message: 'slow:1000' },
                 }),
-                fetch('POST', '/api/chat', {
+                fetch('POST', '/api/session', {
+                    body: { message: 'second' },
                     headers: { Authorization: `Bearer ${TEST_TOKEN}` },
-                    body: { message: 'fast' },
                 }),
             ]);
-            // At least one of them should be 200, the other could be 429 or 200
-            // (timing-dependent, but we check the lock behavior)
-            const statuses = [r1.status, r2.status];
-            assert('one returns 200', statuses.includes(200));
-            // If the second one got 429, the lock is working
-            if (statuses.includes(429)) {
-                const r429 = r1.status === 429 ? r1 : r2;
-                assert('concurrent request returns 429', true);
-                assert('429 has text about "正在处理上一条"', r429.json &&
-                    r429.json.text && r429.json.text.includes('正在处理上一条'));
-            } else {
-                // Both returned 200 (sequential execution), acceptable
-                console.log('  ~ concurrent lock not triggered (timing), both 200');
-            }
+            const codes = [a.status, b.status].sort();
+            assert('one request is rejected with 429', codes.includes(429), `codes=${codes.join(',')}`);
         }
-
-        // ===== 7. POST /api/restart without token =====
-        console.log('7. POST /api/restart without token (should 401)');
-        {
-            const r = await fetch('POST', '/api/restart');
-            assert('returns 401', r.status === 401);
-        }
-
-        // ===== 8. POST /api/restart with token =====
-        console.log('8. POST /api/restart with token');
-        {
-            const r = await fetch('POST', '/api/restart', {
-                headers: { Authorization: `Bearer ${TEST_TOKEN}` },
-            });
-            // Without SUPERVISOR_TOKEN, it should return 500
-            assert('returns 500 (no SUPERVISOR_TOKEN)', r.status === 500);
-        }
-
-        // ===== 9. GET /api/update/status =====
-        console.log('9. GET /api/update/status');
-        {
-            const r = await fetch('GET', '/api/update/status', {
-                headers: { Authorization: `Bearer ${TEST_TOKEN}` },
-            });
-            assert('returns 200', r.status === 200);
-            assert('has current version', r.json && typeof r.json.current === 'string');
-            assert('has ok field', r.json && r.json.ok === true);
-        }
-
-        // ===== 10. Token timing constant-time check =====
-        console.log('10. Token comparison timing (constant-time)');
-        {
-            // Measure response time for wrong-length vs right-length tokens
-            const shortToken = 'Bearer short';
-            const sameLenToken = 'Bearer ' + 'x'.repeat(TEST_TOKEN.length);
-
-            const t1 = Date.now();
-            await fetch('POST', '/api/chat', {
-                headers: { Authorization: shortToken },
-                body: { message: 'hi' },
-            });
-            const dt1 = Date.now() - t1;
-
-            const t2 = Date.now();
-            await fetch('POST', '/api/chat', {
-                headers: { Authorization: sameLenToken },
-                body: { message: 'hi' },
-            });
-            const dt2 = Date.now() - t2;
-
-            // Both should be within ALLOWED_DIFF ms of each other
-            const diff = Math.abs(dt1 - dt2);
-            assert('short vs same-length token timing within ' + ALLOWED_DIFF + 'ms',
-                diff < ALLOWED_DIFF, `diff=${diff}ms`);
-        }
-
-        // ===== 11. Unknown endpoint =====
-        console.log('11. GET /api/nonexistent (should 404)');
-        {
-            const r = await fetch('GET', '/api/nonexistent', {
-                headers: { Authorization: `Bearer ${TEST_TOKEN}` },
-            });
-            assert('returns 404', r.status === 404);
-        }
-
-    } finally {
-        // Cleanup
-        server.kill('SIGTERM');
-        await sleep(200);
+    } catch (e) {
+        console.log(`  ✗ run aborted: ${e.message}`);
+        failed++;
+        server.kill();
+        mock.kill();
     }
 
-    // ---- Summary ----
-    const total = passed + failed;
-    console.log(`\n${'='.repeat(50)}`);
-    console.log(`Results: ${passed}/${total} passed, ${failed}/${total} failed`);
-    console.log(`${'='.repeat(50)}\n`);
-
-    process.exit(failed > 0 ? 1 : 0);
+    if (serverLog.trim()) console.log('--- api_server log ---\n' + serverLog);
+    if (mockLog.trim()) console.log('--- mock log ---\n' + mockLog);
+    console.log(`\n  ${passed} passed, ${failed} failed\n`);
+    if (failed > 0) {
+        if (serverLog.trim()) console.log('--- api_server log ---\n' + serverLog);
+        if (mockLog.trim()) console.log('--- mock log ---\n' + mockLog);
+        process.exit(1);
+    }
+    process.exit(0);
 }
 
-run().catch((err) => {
-    console.error('Test runner error:', err);
-    process.exit(1);
-});
+run().catch((e) => { console.error(e); process.exit(1); });

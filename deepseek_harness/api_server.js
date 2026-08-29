@@ -7,20 +7,22 @@
  * custom_component depends on. The custom_component NEVER talks to DSH's
  * volatile RC internals directly; it only calls this contract:
  *
- *   POST /api/chat    { message, session? }  -> { text }
  *   POST /api/session { message, session? }  -> { text, sessionId }
  *   GET  /api/status                          -> { online, ... }
  *   POST /api/restart                         -> { ok }
+ *   GET  /api/update/status                   -> { current, latest, next, ... }
+ *   POST /api/update  { channel }             -> { ok, version }
  *
- * /api/chat drives DSH through `dsh --profile headless`, the stable
- * one-shot agent runner.
+ * The conversation path is the multi-turn session relay (path A): it talks to
+ * the running web profile's Typert Remote RPC surface at 127.0.0.1:3081 over
+ * plain HTTP POST /api/<endpoint> (workspace.list, session.create,
+ * session.list, session.history, session.prompt), so the HA conversation keeps
+ * real memory across turns. The returned `sessionId` is used as the HA
+ * conversation_id.
  *
- * /api/session is the multi-turn session relay (path A): it talks to the
- * running web profile's Typert Remote RPC surface at 127.0.0.1:3081 over
- * plain HTTP POST /api/<endpoint> (session.create / session.list /
- * session.history / session.prompt), so the HA conversation keeps real
- * memory across turns and the reply streams back. The `sessionId` returned
- * is used as the HA conversation_id.
+ * Sessions are created with (or adopted into) a workspace, because DSH renders
+ * its session tree grouped by workspace: an unregistered session never shows in
+ * the DSH UI.
  */
 
 const http = require('http');
@@ -32,7 +34,9 @@ const PORT = parseInt(process.env.DSH_API_PORT || '3082', 10);
 const DSH_BIN =
   process.env.DSH_BIN ||
   '/usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js';
-const DSH_WEB_PORT = 3081;
+// DSH web profile port. Env-overridable so the contract tests can point the
+// bridge at a mock DSH RPC server (see tests/mock_dsh_web.js).
+const DSH_WEB_PORT = parseInt(process.env.DSH_WEB_PORT || '3081', 10);
 // 共享密钥鉴权：由 run.sh 从 addon 配置 (api_token) 注入。
 // 未配置时对写操作 fail-closed（401），防止容器网络内未授权调用触发 DSH 代码执行。
 const API_TOKEN = process.env.DSH_API_TOKEN || '';
@@ -41,8 +45,6 @@ const VENDOR_DIR = '/data/dsh/vendor';
 const VENDOR_TMP = '/data/dsh/vendor.tmp';
 const VENDOR_DSH_BIN = path.join(VENDOR_DIR, 'node_modules/@deepseek-ai/dsh/lib/bin.js');
 const NPM_REGISTRY = process.env.DSH_NPM_REGISTRY || 'https://registry.npmmirror.com';
-const CHAT_TIMEOUT_MS = 60 * 1000; // headless 单次调用上限 60s
-let chatInFlight = false; // 单飞锁：同一时间只允许 1 个 headless 调用
 
 // 常量时间比较，避免时序侧信道
 function tokenMatches(header) {
@@ -79,40 +81,6 @@ function readBody(req) {
   });
 }
 
-function runHeadless(message, timeoutMs = CHAT_TIMEOUT_MS) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(
-      'node',
-      ['--expose-internals', DSH_BIN, '--profile', 'headless', message],
-      { env: process.env }
-    );
-    let out = '';
-    let err = '';
-    const timer = setTimeout(() => {
-      child.kill('SIGKILL');
-      reject(new Error(`DSH 调用超时（${Math.round(timeoutMs / 1000)}s）`));
-    }, timeoutMs);
-    child.stdout.on('data', (d) => {
-      out += d.toString();
-    });
-    child.stderr.on('data', (d) => {
-      err += d.toString();
-    });
-    child.on('error', (e) => {
-      clearTimeout(timer);
-      reject(new Error('启动 DSH 失败: ' + e.message));
-    });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      const text = out.trim();
-      if (code !== 0 && !text) {
-        reject(new Error('DSH 退出码 ' + code + ': ' + err.slice(0, 500)));
-      } else {
-        resolve(text);
-      }
-    });
-  });
-}
 
 // ---- 多轮会话中继（path A：DSH web 的 Typert Remote RPC）----
 // 直接向运行中的 web profile（127.0.0.1:3081）发起 session 类 RPC。
@@ -333,29 +301,6 @@ async function handleSession(req, res) {
   }
 }
 
-async function handleChat(req, res) {
-  // 单飞锁：headless 是重进程，同一时间只允许 1 个调用
-  if (chatInFlight) {
-    sendJson(res, 429, { text: 'DSH 正在处理上一条请求，请稍后再试' });
-    return;
-  }
-  chatInFlight = true;
-  try {
-    const raw = await readBody(req);
-    const body = raw ? JSON.parse(raw) : {};
-    const message = (body.message || '').toString();
-    if (!message) {
-      sendJson(res, 400, { text: '缺少 message 字段' });
-      return;
-    }
-    const text = await runHeadless(message);
-    sendJson(res, 200, { text });
-  } catch (e) {
-    sendJson(res, 502, { text: 'DSH 调用失败: ' + e.message });
-  } finally {
-    chatInFlight = false;
-  }
-}
 
 function handleStatus(req, res) {
   const probe = http.request(
@@ -585,7 +530,6 @@ const server = http.createServer((req, res) => {
     return;
   }
   if (req.method === 'POST' && req.url === '/api/update') return handleUpdate(req, res);
-  if (req.method === 'POST' && req.url === '/api/chat') return handleChat(req, res);
   if (req.method === 'POST' && req.url === '/api/session') return handleSession(req, res);
   if (req.method === 'POST' && req.url === '/api/restart') return handleRestart(req, res);
   sendJson(res, 404, { error: 'not found' });
