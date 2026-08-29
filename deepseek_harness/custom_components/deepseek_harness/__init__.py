@@ -32,7 +32,7 @@ from .dsh_client import DSHClient
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = ["conversation", "sensor"]
+PLATFORMS = ["button", "conversation", "sensor"]
 
 
 async def _detect_addon_host(hass: HomeAssistant) -> str | None:

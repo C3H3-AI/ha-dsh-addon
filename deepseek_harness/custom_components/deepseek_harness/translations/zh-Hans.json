@@ -18,6 +18,14 @@
       "runtime_status": {
         "name": "运行时状态"
       }
+    },
+    "button": {
+      "restart": {
+        "name": "重启 DSH"
+      },
+      "update": {
+        "name": "更新 DSH"
+      }
     }
   }
 }

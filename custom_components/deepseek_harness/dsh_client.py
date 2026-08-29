@@ -112,6 +112,45 @@ class DSHClient:
         except aiohttp.ClientError:
             return {"online": False}
 
+    async def update_status(self) -> dict[str, Any]:
+        """Return DSH update info (current/latest/next, vendor in use)."""
+        session = await self._get_session()
+        try:
+            async with async_timeout.timeout(20):
+                async with session.get(
+                    f"{self._base_url}/api/update/status",
+                    headers=self._headers(),
+                ) as resp:
+                    if resp.status != 200:
+                        return {"ok": False, "error": f"status {resp.status}"}
+                    return await resp.json()
+        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+            return {"ok": False, "error": str(err)}
+
+    async def trigger_update(self, channel: str = "next") -> dict[str, Any]:
+        """Ask the add-on to update the DSH runtime in place.
+
+        The add-on runs npm install into /data/dsh/vendor and swaps it
+        atomically; it restarts DSH itself when it succeeds.
+        """
+        session = await self._get_session()
+        try:
+            async with async_timeout.timeout(300):
+                async with session.post(
+                    f"{self._base_url}/api/update",
+                    json={"channel": channel},
+                    headers=self._headers(),
+                ) as resp:
+                    body = await resp.text()
+                    if resp.status != 200:
+                        return {"ok": False, "error": f"status {resp.status}: {body[:200]}"}
+                    try:
+                        return await resp.json()
+                    except Exception:  # noqa: BLE001 - non-JSON body is tolerable
+                        return {"ok": True, "raw": body[:200]}
+        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+            return {"ok": False, "error": str(err)}
+
     async def restart(self) -> bool:
         """Ask the add-on to restart the DSH runtime."""
         session = await self._get_session()

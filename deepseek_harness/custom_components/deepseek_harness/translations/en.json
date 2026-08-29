@@ -18,6 +18,14 @@
       "runtime_status": {
         "name": "Runtime Status"
       }
+    },
+    "button": {
+      "restart": {
+        "name": "Restart DSH"
+      },
+      "update": {
+        "name": "Update DSH"
+      }
     }
   }
 }
