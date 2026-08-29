@@ -72,7 +72,7 @@ class DeepseekConversationAgent(
 
         response = intent.IntentResponse(language=user_input.language)
         response.async_set_speech(text)
-        return conversation.result(
+        return conversation.ConversationResult(
             response=response,
             conversation_id=session_id or user_input.conversation_id,
         )
