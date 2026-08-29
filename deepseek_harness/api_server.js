@@ -158,7 +158,12 @@ async function sessionBaselineSeq(sessionId) {
   return Math.max(-1, ...(before.events ?? []).map((e) => e.event?.seq ?? -1));
 }
 
-// 挑选或创建会话：有 session 则沿用；否则选最近活跃的非空白会话；再没有就新建。
+// 挑选或创建会话：
+// - 给了 sessionId 且仍存在 -> 沿用（同一 HA 对话的多轮）。
+// - 否则（新对话 / 旧 id 已失效）-> 新建会话。
+// 注意：不再复用"最近活跃的其它会话"。此前复用会把新的 HA 对话追加到
+// 一个已经很长的历史会话里（累计上万事件 / 十万级 token），导致每次
+// 请求都重放巨大上下文，触发 LLM provider 限流（"请求太频繁，AI 服务限流中"）。
 async function resolveSession(sessionId) {
   if (typeof sessionId === 'string' && sessionId) {
     try {
@@ -167,17 +172,6 @@ async function resolveSession(sessionId) {
     } catch {
       // session-not-found 或已失效 -> 落到新建
     }
-  }
-  try {
-    const list = await dshRpc('session.list', {});
-    const items = list?.items ?? [];
-    // 优先非空白、非 running 的最近会话（updatedAt 降序）
-    const candidate = items
-      .filter((it) => it && it.sessionId && it.blank !== true && it.running !== true)
-      .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))[0];
-    if (candidate) return candidate.sessionId;
-  } catch {
-    // list 失败则直接新建
   }
   const created = await dshRpc('session.create', {});
   return created.sessionId;
