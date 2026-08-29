@@ -36,10 +36,24 @@ Home Assistant Core
 
 ## 当前范围
 
-- ✅ P1：config_flow + 对话代理（AssH Assist）+ 运行时状态 sensor + add-on 桥接 API（`/api/chat`、`/api/status`、`/api/restart`）。
+- ✅ P1：config_flow + 对话代理（Assist）+ 运行时状态 sensor + add-on 桥接 API（`/api/chat`、`/api/session`、`/api/status`、`/api/restart`）。
+- ✅ 多轮会话：`/api/session` 走 DSH web 的 Typert Remote RPC（`session.create` / `session.list` / `session.history` / `session.prompt`），`sessionId` 即 HA 的 `conversation_id`，跨轮保留真实上下文，回复按 `rpcId` 关联并流式累计。
 - 🚧 P2：全实体（sensor/binary_sensor/switch/button）+ services + intents。
 - 🚧 P3：侧边栏面板 + diagnostics + 完整翻译。
-- ⚠️ 多轮会话：P1 的桥接用 `dsh --profile headless`（一次性任务），默认无跨轮记忆；后续升级为 Web profile 的 WebSocket 会话中继以获得真正的多轮 + 工具流式。
+
+## 多轮会话（path A）
+
+从 v0.2.30 起，对话代理改用 **多轮会话中继** 而非 headless 一次性调用：
+
+- 集成调用 `POST /api/session`（add-on :3082）。
+- add-on 桥接层直接对接运行中的 DSH web profile（127.0.0.1:3081）的
+  Typert Remote RPC 面：`session.create` / `session.list` /
+  `session.history` / `session.prompt`。
+- 返回的 `sessionId` 作为 HA 的 `conversation_id` 回传，后续轮次继续沿用，
+  从而在 DSH 里保留真实会话上下文（记忆、工作区、工具）。
+- 每次对话在 addon 的 `api_token` 下鉴权（Authorization: Bearer）。
+
+> 该路径在 add-on 内实现，HA 集成仍只依赖稳定桥接 API，DSH 上游变更只需改 add-on。
 
 ## 注意
 
