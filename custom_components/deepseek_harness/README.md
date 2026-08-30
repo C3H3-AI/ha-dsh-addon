@@ -73,13 +73,14 @@ DSH 的会话树**按 workspace 分组渲染**。会话必须注册到 workspace
 |------|------|------|
 | `POST /api/session` | **多轮会话中继（当前对话路径）** | ✅ 集成在用 |
 | `GET /api/status` | 状态探针（online / DSH 可达） | ✅ sensor 在用 |
-| `POST /api/restart` | 重启 DSH 运行时 | ⚠️ 已实现，**HA 界面未接** |
-| `POST /api/update` | 一键更新 DSH（装到 `/data/dsh/vendor`） | ⚠️ 已实现，**HA 界面未接** |
-| `GET /api/update/status` | 查当前/最新/next 版本 | ⚠️ 已实现，未接 |
-| `GET /api/update/result` | 查上次更新结果 | ⚠️ 已实现，未接 |
+| `POST /api/restart` | 重启 DSH 运行时 | ✅ 已接（按钮“重启 DSH”） |
+| `POST /api/update` | 一键更新 DSH（装到 `/data/dsh/vendor`） | ✅ 已接（按钮“更新 DSH”） |
+| `GET /api/update/status` | 查当前/最新/next 版本 | ⚠️ 已实现，未接 UI |
+| `GET /api/update/result` | 查上次更新结果 | ⚠️ 已实现，未接 UI |
 | `POST /api/chat` | headless 一次性调用（无记忆） | 🗑 旧路径，集成已不再调用 |
 
-> 重启 / 一键更新目前只能用 curl 手动触发（见下）。接进 HA 界面（button 实体或 service）是后续项。
+> 重启 / 一键更新已接为 HA 按钮实体（“重启 DSH” / “更新 DSH”），与运行时状态传感器同设备。
+> 也可用下方 curl 手动触发。
 
 手动触发：
 

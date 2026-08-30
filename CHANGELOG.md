@@ -2,6 +2,25 @@
 
 本 addon 的版本变更记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.32] - 2026-08-30
+
+### 新增
+
+- **HA 界面控制按钮**：新增 `button` 平台，把 addon 桥接层早已实现但无人调用的
+  `POST /api/restart` 与 `POST /api/update` 暴露为 HA 按钮实体
+  （“重启 DSH” / “更新 DSH”），无需 curl 即可在 UI 与自动化中触发。
+  `dsh_client` 新增 `update_status()` 与 `trigger_update(channel)`。
+
+### 变更
+
+- **移除 `/api/chat` headless 死代码**：该端点经 `dsh --profile headless`
+  一次性调用（无记忆），自会话中继上线后集成已不再使用。删除 `runHeadless()`、
+  `handleChat()`、`chatInFlight`、`CHAT_TIMEOUT_MS`、路由及 `DSHClient.chat()`。
+- **契约测试迁移到 `/api/session`**：新增 `tests/mock_dsh_web.js`（mock DSH web
+  profile，含完整 turn 生命周期），`DSH_WEB_PORT` 改为可经环境变量覆盖。
+  12 项断言通过：status 公开、session 鉴权 401（缺/错 token）、多轮回复、
+  conversation_id 复用、空消息 400、单飞锁 429。
+
 ## [0.2.31] - 2026-08-29
 
 ### 新增
