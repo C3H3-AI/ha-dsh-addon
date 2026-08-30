@@ -112,6 +112,7 @@ DSH 处于测试期（rc.x），更新频繁。本 addon 提供 Web 一键更新
 ## 开发
 
 详见 [docs/DESIGN.md](docs/DESIGN.md)（完整设计方案与关键决策记录）。
+- 排障与调试经验（踩坑实录、排查顺序、常用命令）：[docs/DEBUGGING.md](docs/DEBUGGING.md)
 
 - 本地测试：`node api_server.js`（需 `DSH_API_TOKEN` 环境变量）
 - 双轨版本号：addon 轨 `config.yaml` == `Dockerfile`（当前 `0.2.31`）；集成轨 `const.py` == `manifest.json`（当前 `0.2.2`）。两轨独立、不跨轨比较。CI 通过 `scripts/check-versions.sh` 校验各自一致。
