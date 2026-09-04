@@ -87,17 +87,21 @@ function readBody(req) {
 // 请求/响应包络与 DSH 浏览器客户端一致：
 //   请求 {type:'client-request', rpcId, method, payload}
 //   响应 {type:'server-response', rpcId, result:{ok, value|error}}
-// 说明：走 loopback（127.0.0.1）通过 DSH 的 Host/Origin 围栏；在 HA 部署里
-// DSH web 未强制浏览器 cookie 认证，因此无额外鉴权即可调用。若上游开启
-// 浏览器会话认证，此处需补充按 DSH cookie 格式（client-connection/browser-session）
-// 生成的 Cookie 头，改动限定在本文件。
+// 说明：走 loopback（127.0.0.1）通过 DSH 的 Host/Origin 围栏；DSH 0.1.2-rc+ 对
+// 全部 API 强制 browser-session 认证（无 Cookie 返回 401）。run.sh 启动时已用
+// launch token 换取浏览器会话 Cookie 并导出为 DSH_BRIDGE_COOKIE，这里随请求携带。
 const DSH_WEB_ORIGIN = 'http://127.0.0.1:' + DSH_WEB_PORT;
+
+// DSH browser-session cookie（run.sh 换取，authority 绑定 127.0.0.1:3081）
+const DSH_BRIDGE_COOKIE = process.env.DSH_BRIDGE_COOKIE || '';
 
 // 单次 DSH web RPC 调用。rpcId 可选，供 session.prompt 用作文本流关联键。
 async function dshRpc(method, payload, rpcId) {
+  const headers = { 'content-type': 'application/json' };
+  if (DSH_BRIDGE_COOKIE) headers['cookie'] = DSH_BRIDGE_COOKIE;
   const res = await fetch(DSH_WEB_ORIGIN + '/api/' + method, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers,
     body: JSON.stringify({
       type: 'client-request',
       rpcId: rpcId || 'dsh-bridge-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),

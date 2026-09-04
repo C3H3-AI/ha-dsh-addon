@@ -642,26 +642,61 @@ cd "${DSH_WORKSPACE}" || true
 # 注意：dsh 的 HMR 插件需要 --expose-internals 标志，必须通过 node 命令行参数传递
 # 直接使用 dsh 包的入口文件（避免 .bin 目录 symlink 问题）
 # 若启用 HA MCP，则通过 Home 级 cordis.patch.yml 注入 mcp-client 插件
-node --expose-internals "${DSH_BIN}" --profile web --host 127.0.0.1 --port 3081 &
+# DSH stdout 重定向到持久化日志文件，供解析 launch token（browser-session 认证）
+DSH_WEB_LOG="${DSH_HOME}/dsh-web.log"
+node --expose-internals "${DSH_BIN}" --profile web --host 127.0.0.1 --port 3081 >"${DSH_WEB_LOG}" 2>&1 &
 DSH_PID=$!
 
 # 等待 DSH Web UI 就绪
+# 注意：0.1.2-rc+ 强制认证下 GET / 返回 401，wget 会视为错误而反复重试。
+# 改用 curl 输出 HTTP 状态码，只要服务器有任何响应即视为就绪。
 echo "[DSH Addon] Waiting for DSH Web UI to be ready..."
 for i in $(seq 1 30); do
-    if wget -qO- http://127.0.0.1:3081 > /dev/null 2>&1; then
+    if curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3081/ 2>/dev/null | grep -qE '^[0-9]{3}$'; then
         echo "[DSH Addon] DSH Web UI is ready on 127.0.0.1:3081"
         break
     fi
     sleep 2
 done
 
+# ===== 提取 DSH launch token 并换取浏览器会话 Cookie（DSH 0.1.2-rc+ 强制认证）=====
+# DSH 0.1.2-rc.1+ 的 Web Host 对全部 API（含 session.*/settings.* RPC）强制
+# browser-session 认证，无有效 Cookie 一律 401，导致 bridge/HA 对话链路失效。
+# dsh web 启动时打印 root URL 附带进程级 launch token（仅本次进程有效）：
+#   dsh web: http://127.0.0.1:3081/?token=<token>
+# 用 curl 访问 /?token=... 即换取绑定 authority 的签名 Cookie（Max-Age=30天，
+# 进程重启后仍有效）。将 Cookie 导出为 DSH_BRIDGE_COOKIE 供 bridge 携带。
+DSH_BRIDGE_COOKIE=""
+if [ -f "${DSH_WEB_LOG}" ]; then
+    DSH_TOKEN=$(grep -oE 'http://127\.0\.0\.1:3081/\?token=[A-Za-z0-9_-]+' "${DSH_WEB_LOG}" | tail -1 | sed 's/.*token=//')
+    if [ -n "${DSH_TOKEN}" ]; then
+        echo "[DSH Addon] DSH launch token found, exchanging for browser-session cookie..."
+        DSH_COOKIE_HEADER=$(curl -s -D - -o /dev/null "http://127.0.0.1:3081/?token=${DSH_TOKEN}" \
+            | grep -i '^set-cookie:' | sed -E 's/^[Ss]et-[Cc]ookie: ([^;]+).*/\1/' | tr -d '\r' | tail -1)
+        if [ -n "${DSH_COOKIE_HEADER}" ]; then
+            export DSH_BRIDGE_COOKIE="${DSH_COOKIE_HEADER}"
+            echo "[DSH Addon] DSH browser-session cookie acquired (bridge RPC authenticated)"
+        else
+            echo "[DSH Addon] WARNING: failed to exchange DSH launch token for cookie (bridge RPC may return 401)"
+        fi
+    else
+        echo "[DSH Addon] WARNING: no DSH launch token found in ${DSH_WEB_LOG} (bridge RPC may return 401)"
+    fi
+else
+    echo "[DSH Addon] WARNING: ${DSH_WEB_LOG} not found (bridge RPC may return 401)"
+fi
+
 # ===== 关闭 DSH 设备配对（HA Ingress 下不需要 LAN 配对）=====
 # DSH rc.8 引入了 remote-web-ui 和设备配对功能，在 Ingress 环境下
 # DSH 认为连接来自远程设备，要求配对才能访问工作区数据。
 # 设置 requirePairingForLan=false 跳过配对检查。
+# 注意：0.1.2-rc+ 下该 RPC 也需浏览器会话 Cookie，否则 401 静默失败。
 echo "[DSH Addon] Disabling DSH device pairing (requirePairingForLan=false)..."
+DSH_CURL_AUTH=()
+[ -n "${DSH_BRIDGE_COOKIE}" ] && DSH_CURL_AUTH=(-H "Cookie: ${DSH_BRIDGE_COOKIE}")
 curl -s -X POST http://127.0.0.1:3081/api/settings.mutate \
   -H "Content-Type: application/json" \
+  "${DSH_CURL_AUTH[@]}" \
   -d '{"type":"client-request","rpcId":"startup","method":"settings.mutate","payload":{"ns":"remote-web-ui","ops":[{"op":"set","path":[],"value":{"requirePairingForLan":false,"enabled":true}}]}}' \
   > /dev/null 2>&1 || echo "[DSH Addon]   WARNING: failed to disable device pairing (DSH may not be ready yet)"
 

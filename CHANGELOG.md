@@ -2,6 +2,13 @@
 
 本 addon 的版本变更记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.34] - 2026-09-04
+
+### 修复
+
+- **DSH 0.1.2-rc+ 强制浏览器会话认证**：DSH 新版 Web Host 对全部 API（含 `session.*` / `settings.*` RPC）强制 browser-session 认证，无有效 Cookie 一律 401，导致 HA 对话（conversation agent）与配对禁用全部失效。现于 `run.sh` 启动时从 DSH 启动日志解析 launch token，经 `GET /?token=...` 换取绑定 authority 的签名 Cookie（Max-Age=30 天），导出为 `DSH_BRIDGE_COOKIE`；`api_server.js` 的 `dshRpc` 随请求携带该 Cookie，恢复 HA 会话中继链路。
+- **就绪探测兼容 401**：`run.sh` 的 Web UI 就绪探测改用 curl 按任意 HTTP 状态码判定（此前 `wget` 遇 401 视为失败反复重试，会拖慢整个启动）。
+
 ## [0.2.33] - 2026-09-04
 
 ### 新增
