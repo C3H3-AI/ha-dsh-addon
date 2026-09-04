@@ -2,6 +2,13 @@
 
 本 addon 的版本变更记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.35] - 2026-09-04
+
+### 修复
+
+- **launch token 提取改为轮询等待**：0.2.34 的 token 解析在"端口就绪"检测后立即执行，但 `dsh-web-app` 要等 profile/loader 完全加载后才打印 `dsh web: http://127.0.0.1:3081/?token=...`（`announceReady` 依赖 `loader.await()`），导致 grep 时 token 尚未写出、`DSH_BRIDGE_COOKIE` 为空、bridge 的 `session.*` RPC 仍 401。现改为最多等待 90 秒、每 2 秒轮询一次日志，正则放宽为 `[?&]token=` 并 `tr -d '\r'` 清理 CR；仍未取到时输出日志末尾 40 行辅助定位。
+- **Cookie 交换不再跟随重定向**：`/?token=...` 返回 303 + `set-cookie`，curl 不保存 cookie，跟随 303 无意义，改为单次请求直接读取 303 响应头。
+
 ## [0.2.34] - 2026-09-04
 
 ### 修复

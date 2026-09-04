@@ -667,23 +667,38 @@ done
 # 用 curl 访问 /?token=... 即换取绑定 authority 的签名 Cookie（Max-Age=30天，
 # 进程重启后仍有效）。将 Cookie 导出为 DSH_BRIDGE_COOKIE 供 bridge 携带。
 DSH_BRIDGE_COOKIE=""
-if [ -f "${DSH_WEB_LOG}" ]; then
-    DSH_TOKEN=$(grep -oE 'http://127\.0\.0\.1:3081/\?token=[A-Za-z0-9_-]+' "${DSH_WEB_LOG}" | tail -1 | sed 's/.*token=//')
-    if [ -n "${DSH_TOKEN}" ]; then
-        echo "[DSH Addon] DSH launch token found, exchanging for browser-session cookie..."
-        DSH_COOKIE_HEADER=$(curl -s -D - -o /dev/null "http://127.0.0.1:3081/?token=${DSH_TOKEN}" \
-            | grep -i '^set-cookie:' | sed -E 's/^[Ss]et-[Cc]ookie: ([^;]+).*/\1/' | tr -d '\r' | tail -1)
-        if [ -n "${DSH_COOKIE_HEADER}" ]; then
-            export DSH_BRIDGE_COOKIE="${DSH_COOKIE_HEADER}"
-            echo "[DSH Addon] DSH browser-session cookie acquired (bridge RPC authenticated)"
-        else
-            echo "[DSH Addon] WARNING: failed to exchange DSH launch token for cookie (bridge RPC may return 401)"
+# 轮询等待 launch token 出现：dsh-web-app 要等 profile/loader 完全加载后才
+# 打印 "dsh web: http://127.0.0.1:3081/?token=..."（见 dsh-web-app announceReady），
+# 而端口就绪检测只证明 socket 已监听，不代表 token 已写出。这里最多等 90 秒。
+# 正则放宽为 [?&]token=（不限定完整 URL），并 tr -d '\r' 清理 CR（日志可能带 \r\n）。
+DSH_TOKEN=""
+echo "[DSH Addon] Waiting for DSH launch token in ${DSH_WEB_LOG}..."
+for i in $(seq 1 45); do
+    if [ -f "${DSH_WEB_LOG}" ]; then
+        DSH_TOKEN=$(grep -oE '[?&]token=[A-Za-z0-9_-]+' "${DSH_WEB_LOG}" 2>/dev/null | tail -1 | sed 's/.*token=//' | tr -d '\r')
+        if [ -n "${DSH_TOKEN}" ]; then
+            echo "[DSH Addon] DSH launch token found after ${i} poll(s)"
+            break
         fi
+    fi
+    sleep 2
+done
+if [ -n "${DSH_TOKEN}" ]; then
+    echo "[DSH Addon] Exchanging launch token for browser-session cookie..."
+    # 用 token 访问根路径换取签名 Cookie：DSH 对 /?token=... 返回 303 + set-cookie。
+    # 不跟随重定向（curl 不保存 cookie，跟随无意义），直接读取 303 响应头里的 set-cookie。
+    DSH_COOKIE_HEADER=$(curl -s -D - -o /dev/null "http://127.0.0.1:3081/?token=${DSH_TOKEN}" \
+        | grep -i '^set-cookie:' | sed -E 's/^[Ss]et-[Cc]ookie: ([^;]+).*/\1/' | tr -d '\r' | tail -1)
+    if [ -n "${DSH_COOKIE_HEADER}" ]; then
+        export DSH_BRIDGE_COOKIE="${DSH_COOKIE_HEADER}"
+        echo "[DSH Addon] DSH browser-session cookie acquired (bridge RPC authenticated)"
     else
-        echo "[DSH Addon] WARNING: no DSH launch token found in ${DSH_WEB_LOG} (bridge RPC may return 401)"
+        echo "[DSH Addon] WARNING: failed to exchange DSH launch token for cookie (bridge RPC may return 401)"
     fi
 else
-    echo "[DSH Addon] WARNING: ${DSH_WEB_LOG} not found (bridge RPC may return 401)"
+    echo "[DSH Addon] WARNING: no DSH launch token found after 90s in ${DSH_WEB_LOG} (bridge RPC may return 401)"
+    echo "[DSH Addon] DEBUG: last 40 lines of ${DSH_WEB_LOG}:"
+    tail -n 40 "${DSH_WEB_LOG}" 2>/dev/null | sed 's/^/    /' || echo "    (log file unreadable)"
 fi
 
 # ===== 关闭 DSH 设备配对（HA Ingress 下不需要 LAN 配对）=====
