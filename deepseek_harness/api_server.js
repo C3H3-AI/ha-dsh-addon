@@ -26,6 +26,7 @@
  */
 
 const http = require('http');
+const crypto = require('crypto');
 const { spawn, execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -85,33 +86,82 @@ function readBody(req) {
 // ---- 多轮会话中继（path A：DSH web 的 Typert Remote RPC）----
 // 直接向运行中的 web profile（127.0.0.1:3081）发起 session 类 RPC。
 // 请求/响应包络与 DSH 浏览器客户端一致：
-//   请求 {type:'client-request', rpcId, method, payload}
+//   请求 {type:'client-request', rpcId, method, payload:{args:{request}}}
 //   响应 {type:'server-response', rpcId, result:{ok, value|error}}
 // 说明：走 loopback（127.0.0.1）通过 DSH 的 Host/Origin 围栏；DSH 0.1.2-rc+ 对
-// 全部 API 强制 browser-session 认证（无 Cookie 返回 401）。run.sh 启动时已用
-// launch token 换取浏览器会话 Cookie 并导出为 DSH_BRIDGE_COOKIE，这里随请求携带。
+// 全部 API 强制 browser-session 认证（无 Cookie 返回 401）。Cookie 是 HMAC-SHA256
+// 签名的 authority 绑定凭证，签名 secret 持久化在 $DSH_HOME/.credentials.yaml 的
+// client-connection/browser-session 记录里。launch token 每次进程变化且 dsh-web-app
+// 在 profile 加载慢/无头时可能不打印，因此这里直接读取持久化 secret 自行构造等价
+// Cookie（权威性等同 token 交换产物，且跨进程重启有效）。
 const DSH_WEB_ORIGIN = 'http://127.0.0.1:' + DSH_WEB_PORT;
 
-// DSH browser-session cookie（run.sh 换取，authority 绑定 127.0.0.1:3081）
-const DSH_BRIDGE_COOKIE = process.env.DSH_BRIDGE_COOKIE || '';
+function b64u(buf) {
+  return Buffer.from(buf).toString('base64').replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/u, '');
+}
+
+// 读取 DSH 持久化凭据中的 browser-session 签名 secret（base64url 32 字节）。
+function readBrowserSessionSecret() {
+  const credPath = process.env.DSH_CREDENTIALS_PATH || path.join(process.env.DSH_HOME || '/data/dsh', '.credentials.yaml');
+  try {
+    const text = fs.readFileSync(credPath, 'utf8');
+    const m = text.match(/client-connection\/browser-session:[\s\S]*?secret:\s*([A-Za-z0-9_-]+)/);
+    if (!m) return null;
+    const secret = Buffer.from(m[1], 'base64url');
+    if (secret.byteLength !== 32) return null;
+    return secret;
+  } catch {
+    return null;
+  }
+}
+
+// 用 secret 生成与 DSH browser-auth 完全一致的签名 Cookie（name 与 payload 均绑定 authority）。
+function makeDshCookie(secret) {
+  const authority = '127.0.0.1:' + DSH_WEB_PORT;
+  const name = 'dsh-auth-' + b64u(crypto.createHash('sha256').update(authority).digest());
+  const now = Date.now();
+  const body = b64u(Buffer.from(JSON.stringify({
+    version: 1,
+    authority,
+    issuedAt: now,
+    expiresAt: now + 30 * 24 * 60 * 60 * 1000,
+  }), 'utf8'));
+  const sig = b64u(crypto.createHmac('sha256', secret).update(body).digest());
+  return name + '=' + 'v1.' + body + '.' + sig;
+}
+
+// DSH browser-session cookie。优先取 run.sh 换取的（兼容旧流程），否则自生成。
+const DSH_BRIDGE_COOKIE = process.env.DSH_BRIDGE_COOKIE || (() => {
+  const secret = readBrowserSessionSecret();
+  if (secret) {
+    const cookie = makeDshCookie(secret);
+    console.log('[DSH Addon] browser-session cookie generated from persisted secret');
+    return cookie;
+  }
+  console.warn('[DSH Addon] WARNING: no browser-session cookie available (bridge RPC will 401)');
+  return '';
+})();
 
 // 单次 DSH web RPC 调用。rpcId 可选，供 session.prompt 用作文本流关联键。
+// DSH 0.1.2-rc+: endpoint 改为 <ns>/<method>（点转斜杠），payload 包装为
+// { args: { request: <原参数> } }（list 等个别方法参数名不同，见具体调用处）。
 async function dshRpc(method, payload, rpcId) {
+  const wireMethod = method.replace(/\./g, '/');
   const headers = { 'content-type': 'application/json' };
   if (DSH_BRIDGE_COOKIE) headers['cookie'] = DSH_BRIDGE_COOKIE;
-  const res = await fetch(DSH_WEB_ORIGIN + '/api/' + method, {
+  const res = await fetch(DSH_WEB_ORIGIN + '/api/' + wireMethod, {
     method: 'POST',
     headers,
     body: JSON.stringify({
       type: 'client-request',
       rpcId: rpcId || 'dsh-bridge-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
-      method,
-      payload,
+      method: wireMethod,
+      payload: { args: { request: payload } },
     }),
     signal: AbortSignal.timeout(30_000),
   });
   if (!res.ok) {
-    throw new Error('DSH web ' + method + ' 返回 HTTP ' + res.status);
+    throw new Error('DSH web ' + wireMethod + ' 返回 HTTP ' + res.status);
   }
   const body = await res.json();
   if (body?.result?.ok !== true) {
@@ -125,9 +175,15 @@ async function dshRpc(method, payload, rpcId) {
 }
 
 // 取一个会话的历史事件基线 seq（避免把历史助手消息误当本次回复）
+// DSH 0.1.2-rc+: session.history 更名为 session/page（backwards page，records 是事件数组）。
 async function sessionBaselineSeq(sessionId) {
-  const before = await dshRpc('session.history', { sessionId, maxMessages: 1 });
-  return Math.max(-1, ...(before.events ?? []).map((e) => e.event?.seq ?? -1));
+  const page = await dshRpc('session.page', {
+    address: { kind: 'session', sessionId },
+    throughSeq: -1,
+    maxMessages: 1,
+  });
+  const records = page?.records ?? [];
+  return Math.max(-1, ...records.map((r) => r.event?.seq ?? -1));
 }
 
 // 挑选或创建会话：
@@ -136,59 +192,25 @@ async function sessionBaselineSeq(sessionId) {
 // 注意：不再复用"最近活跃的其它会话"。此前复用会把新的 HA 对话追加到
 // 一个已经很长的历史会话里（累计上万事件 / 十万级 token），导致每次
 // 请求都重放巨大上下文，触发 LLM provider 限流（"请求太频繁，AI 服务限流中"）。
+// DSH 0.1.2-rc+: workspace 不再暴露 list RPC（改为 follow stream），无法在创建
+// 前枚举工作区，直接无参创建（会话功能不受影响，仅不预挂到 workspace 树）。
 async function resolveSession(sessionId) {
   if (typeof sessionId === 'string' && sessionId) {
     try {
-      await dshRpc('session.history', { sessionId, maxMessages: 1 });
-      // 会话存在。若它是游离的（未注册到 workspace），补注册，
-      // 让它出现在 DSH UI 的会话树里（见 sessionCreatePayload 的说明）。
-      await ensureWorkspaceRegistered(sessionId);
+      await sessionBaselineSeq(sessionId);
       return sessionId; // 存在则沿用
     } catch {
       // session-not-found 或已失效 -> 落到新建
     }
   }
-  const created = await dshRpc('session.create', await sessionCreatePayload());
+  const created = await dshRpc('session.create', {});
   return created.sessionId;
 }
 
-// 把一个已存在但未挂到 workspace 的会话补注册进去（dsh-im 的 adopt 思路）：
-// session.create({ workspaceId, sessionId }) 在会话已存在时表现为"认领"，
-// 返回的 sessionId 与传入一致。已注册过则直接跳过。
-async function ensureWorkspaceRegistered(sessionId) {
-  try {
-    const list = await dshRpc('workspace.list', {});
-    const items = list?.items ?? [];
-    const owner = items.find((w) => Array.isArray(w?.sessionIds) && w.sessionIds.includes(sessionId));
-    if (owner) return; // 已注册
-    const target = items.find((w) => w && typeof w.workspaceId === 'string' && w.workspaceId);
-    if (!target) return;
-    const adopted = await dshRpc('session.create', { workspaceId: target.workspaceId, sessionId });
-    if (adopted?.sessionId !== sessionId) {
-      console.warn('[DSH Addon] session adopt mismatch for ' + sessionId);
-    }
-  } catch (e) {
-    // 补注册失败不阻断对话，仅记录
-    console.warn('[DSH Addon] session adopt failed: ' + e.message);
-  }
-}
-
-// 新会话必须注册到某个 workspace，否则 DSH 的会话树（按 workspace 分组渲染）
-// 不会显示它 —— 表现为"HA 发的对话在 DSH UI 里看不到"。
-// dsh-im 的 adoptRegisteredWorkspaceSession 正是用 workspaceId + sessionId
-// 调 session.create 来把会话挂到工作区。这里沿用同一做法：
-//   1) workspace.list 取工作区；2) 带 workspaceId 建会话。
-// 取不到 workspace（例如尚未初始化）时退回无参创建，保证链路不中断。
-async function sessionCreatePayload() {
-  try {
-    const list = await dshRpc('workspace.list', {});
-    const first = (list?.items ?? []).find((w) => w && typeof w.workspaceId === 'string' && w.workspaceId);
-    if (first) return { workspaceId: first.workspaceId };
-  } catch {
-    // workspace.list 不可用 -> 退回无参创建
-  }
-  return {};
-}
+// DSH 0.1.2-rc+ 移除了 workspace.list RPC（改为 follow stream），旧版
+// ensureWorkspaceRegistered / sessionCreatePayload（依赖 workspace.list 枚举工作区
+// 并把会话预挂到 workspace 树）已不可用。会话改由 session.create 无参创建，
+// 功能不受影响，仅不预挂 workspace 树（DSH UI 按工作区分组展示时可能不显示）。
 
 // 从一条会话事件里抽取助手文本（assistant/message 的 content 中的 text 段）
 function assistantText(ev) {
@@ -199,13 +221,14 @@ function assistantText(ev) {
     .trim();
 }
 
-// 多轮中继：prompt 后轮询 session.history，按 promptRpcId 关联并累计助手文本，
+// 多轮中继：prompt 后轮询 session.page，按 promptRpcId 关联并累计助手文本，
 // 到 turn/end 结束。超时抛错。
 async function relaySession(message, sessionId, timeoutMs = 120_000) {
   const baselineSeq = await sessionBaselineSeq(sessionId);
   const promptRpcId = 'dsh-bridge-prompt-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
 
   await dshRpc('session.prompt', {
+    requestId: promptRpcId,
     sessionId,
     mode: 'queue',
     content: [{ type: 'text', text: message }],
@@ -226,13 +249,17 @@ async function relaySession(message, sessionId, timeoutMs = 120_000) {
     await sleep(400);
     let hist;
     try {
-      hist = await dshRpc('session.history', { sessionId, maxMessages: 100 });
+      hist = await dshRpc('session.page', {
+        address: { kind: 'session', sessionId },
+        throughSeq: -1,
+        maxMessages: 100,
+      });
     } catch (e) {
       // 轮询瞬时失败则继续，直到超时
       continue;
     }
-    const events = (hist.events ?? [])
-      .map((e) => e.event)
+    const events = (hist.records ?? [])
+      .map((r) => r.event)
       .filter(Boolean)
       .sort((a, b) => (a.seq ?? -1) - (b.seq ?? -1));
     for (const ev of events) {
