@@ -1,4 +1,4 @@
-ARG BUILD_VERSION="0.2.32"
+ARG BUILD_VERSION="0.2.33"
 ARG BUILD_ARCH="aarch64"
 ARG BUILD_FROM="node:22-bookworm-slim"
 
@@ -45,7 +45,7 @@ RUN npm install -g pnpm \
     && pnpm config set global-bin-dir /usr/local/bin --global \
     && pnpm config set registry https://registry.npmmirror.com --global
 
-RUN npm install -g @deepseek-ai/dsh@next \
+RUN npm install -g @deepseek-ai/dsh@latest \
     && ln -sf /usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js /usr/local/bin/dsh \
     && rm -f /usr/local/lib/node_modules/.package-lock.json 2>/dev/null
 

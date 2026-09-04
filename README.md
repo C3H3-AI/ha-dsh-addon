@@ -24,9 +24,9 @@
 [license-url]: https://github.com/C3H3-AI/ha-dsh-addon/blob/main/LICENSE
 [last-commit-badge]: https://img.shields.io/github/last-commit/C3H3-AI/ha-dsh-addon.svg?style=flat-square
 [last-commit-url]: https://github.com/C3H3-AI/ha-dsh-addon/commits/main
-[addon-badge]: https://img.shields.io/badge/addon-0.2.31-4E9AEE.svg?style=flat-square
+[addon-badge]: https://img.shields.io/badge/addon-0.2.33-4E9AEE.svg?style=flat-square
 [addon-url]: https://github.com/C3H3-AI/ha-dsh-addon/blob/main/deepseek_harness/config.yaml
-[integration-badge]: https://img.shields.io/badge/integration-0.2.2-4E9AEE.svg?style=flat-square
+[integration-badge]: https://img.shields.io/badge/integration-0.2.4-4E9AEE.svg?style=flat-square
 [integration-url]: https://github.com/C3H3-AI/ha-dsh-addon/blob/main/custom_components/deepseek_harness/manifest.json
 
 将 **DeepSeek Harness（DSH）** —— 上游开源的 AI Agent 运行框架（"一切皆插件"）—— 封装为 Home Assistant Addon。
@@ -94,10 +94,23 @@ DSH 处于测试期（rc.x），更新频繁。本 addon 提供 Web 一键更新
 
 | 通道 | 说明 |
 |------|------|
-| `latest` | npm 稳定 tag（当前 rc.7） |
-| `next` | npm 预发布 tag（当前 rc.8），一键更新默认目标 |
+| `latest` | npm 稳定 tag（当前 `0.1.2-rc.1`），方案 A 首次自动安装与镜像内置版默认目标 |
+| `next` | npm 预发布 tag（当前 `0.1.2-rc.1`，与 latest 相同），手动一键更新默认目标 |
 
 ## 变更日志
+
+### 0.2.33
+
+- ✨ **首次启动自动安装最新版（方案 A）**：新客户首次启动自动 `npm install @deepseek-ai/dsh@latest` 到持久化 `/data/dsh/vendor`，装完即用稳定通道最新版；失败静默回退镜像内置版，下次启动自动重试。`run.sh` 新增 `install_dsh_vendor()` / `vendor_integrity_ok()`，与一键更新同源（npmmirror + vendor.tmp 原子切换）。
+- 🔄 **内置版默认通道 `@next` → `@latest`**：Dockerfile 与首次自动安装改走稳定通道（当前 `latest`/`next` 同指 `0.1.2-rc.1`）；手动一键更新保持 `next` 默认、可选 `latest`。
+- 🐛 **修复按钮 202 契约**：`trigger_update()` 接受 200/202，修复“更新 DSH”按钮误报失败（桥接层成功返回 202 后台异步执行）。
+- 🐛 **修复按钮国际化**：`button` 平台改用 `translation_key`（en/zh-Hans 生效，英文界面不再显示中文硬编码名）；更新按钮成功后即时推送 `last_update_version`。
+- 🐛 **补齐 icon.png**：发布源集成目录补上 manifest 声明的 `icon.png`。
+
+### 0.2.32
+
+- ✨ **HA 界面控制按钮**：新增 `button` 平台（“重启 DSH” / “更新 DSH”）。
+- 🔄 **移除 `/api/chat` headless 死代码**；契约测试迁移到 `/api/session`（12 项断言）。
 
 ### 0.2.31
 
@@ -115,7 +128,7 @@ DSH 处于测试期（rc.x），更新频繁。本 addon 提供 Web 一键更新
 - 排障与调试经验（踩坑实录、排查顺序、常用命令）：[docs/DEBUGGING.md](docs/DEBUGGING.md)
 
 - 本地测试：`node api_server.js`（需 `DSH_API_TOKEN` 环境变量）
-- 双轨版本号：addon 轨 `config.yaml` == `Dockerfile`（当前 `0.2.31`）；集成轨 `const.py` == `manifest.json`（当前 `0.2.2`）。两轨独立、不跨轨比较。CI 通过 `scripts/check-versions.sh` 校验各自一致。
+- 双轨版本号：addon 轨 `config.yaml` == `Dockerfile`（当前 `0.2.33`）；集成轨 `const.py` == `manifest.json`（当前 `0.2.4`）。两轨独立、不跨轨比较。CI 通过 `scripts/check-versions.sh` 校验各自一致。
 - 测试与 CI：桥接 API 契约测试在 `tests/`（随仓库提交），CI（`.github/workflows/ci.yml`）跑 lint + 版本校验 + 契约测试 + 镜像构建。
 
 ## License

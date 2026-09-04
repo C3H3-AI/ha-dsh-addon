@@ -82,13 +82,17 @@ export DSH_API_PORT="${API_PORT}"
 # ===== DSH 运行路径解析：一键更新(vendor) 优先，否则镜像内置 =====
 # Web 一键更新（DESIGN.md §9）会把新版 DSH 装到 /data/dsh/vendor（持久化），
 # 因此容器每次启动都要优先加载 vendor 里的新版，镜像内置版仅作离线兜底。
+# 首次启动（vendor 不存在）会自动安装 npm 最新 @next 到 vendor，让新装即最新。
 VENDOR_DIR="/data/dsh/vendor"
+VENDOR_TMP="/data/dsh/vendor.tmp"
 VENDOR_DSH_BIN="${VENDOR_DIR}/node_modules/@deepseek-ai/dsh/lib/bin.js"
-if [ -f "${VENDOR_DSH_BIN}" ]; then
-    # 验证 vendor DSH 完整性：package.json 可解析 + 全部运行时依赖可解析。
-    # 曾出现 vendor 装包不全导致 "Cannot find package '@deepseek-ai/cordis-plugin-group'"
-    # DSH 启动失败并进入 stopped 状态，因此损坏时必须自动回退内置版（DESIGN.md §9.6 风险表）。
-    if node -e "
+NPM_REGISTRY="${DSH_NPM_REGISTRY:-https://registry.npmmirror.com}"
+
+# 验证 vendor DSH 完整性：package.json 可解析 + 全部运行时依赖可解析。
+# 曾出现 vendor 装包不全导致 "Cannot find package '@deepseek-ai/cordis-plugin-group'"
+# DSH 启动失败并进入 stopped 状态，因此损坏时必须自动回退内置版（DESIGN.md §9.6 风险表）。
+vendor_integrity_ok() {
+    node -e "
         const fs = require('fs');
         const path = require('path');
         const base = '${VENDOR_DIR}/node_modules';
@@ -107,7 +111,37 @@ if [ -f "${VENDOR_DSH_BIN}" ]; then
           console.error('vendor DSH invalid: ' + e.message);
           process.exit(1);
         }
-    "; then
+    "
+}
+
+# 原子安装 DSH 到 vendor：npm install 到 tmp → 切换 → 写更新标记。
+# 与 api_server.js 的一键更新同源（npmmirror / @next / vendor.tmp 原子切换），
+# 供首次启动自动安装使用。
+install_dsh_vendor() {
+    local channel="$1"
+    rm -rf "${VENDOR_TMP}"
+    mkdir -p "${VENDOR_TMP}"
+    if npm install "@deepseek-ai/dsh@${channel}" \
+            --prefix "${VENDOR_TMP}" \
+            --registry "${NPM_REGISTRY}" \
+            --no-audit --no-fund >/dev/null 2>&1 \
+       && [ -f "${VENDOR_TMP}/node_modules/@deepseek-ai/dsh/lib/bin.js" ]; then
+        rm -rf "${VENDOR_DIR}.old"
+        [ -d "${VENDOR_DIR}" ] && mv "${VENDOR_DIR}" "${VENDOR_DIR}.old"
+        mv "${VENDOR_TMP}" "${VENDOR_DIR}"
+        local ver
+        ver=$(node -e "console.log(require('${VENDOR_DSH_BIN%bin.js}../package.json').version || 'unknown')" 2>/dev/null || echo 'unknown')
+        echo "{\"channel\":\"${channel}\",\"at\":\"$(date -Iseconds)\",\"version\":\"${ver}\"}" > "${VENDOR_DIR}/.updated"
+        echo "[DSH Addon] Installed DSH @${channel} to vendor: ${ver}"
+        return 0
+    fi
+    rm -rf "${VENDOR_TMP}"
+    return 1
+}
+
+if [ -f "${VENDOR_DSH_BIN}" ]; then
+    # vendor 已存在（一键更新过，或首次自动安装成功）→ 校验完整性
+    if vendor_integrity_ok; then
         DSH_BIN="${VENDOR_DSH_BIN}"
         echo "[DSH Addon] Using vendor DSH (one-click updated): ${DSH_BIN}"
         if [ -f "${VENDOR_DIR}/.updated" ]; then
@@ -120,8 +154,17 @@ if [ -f "${VENDOR_DSH_BIN}" ]; then
         echo "[DSH Addon] Using built-in DSH: ${DSH_BIN}"
     fi
 else
-    DSH_BIN="/usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js"
-    echo "[DSH Addon] Using built-in DSH: ${DSH_BIN}"
+    # 首次启动：自动安装 @latest（稳定通道）到持久化 vendor，让新客户装完即用稳定版。
+    # 失败不阻断启动，静默回退镜像内置版（离线兜底），下次启动自动重试。
+    echo "[DSH Addon] First start: auto-installing DSH @latest to vendor..."
+    if install_dsh_vendor "latest" && vendor_integrity_ok; then
+        DSH_BIN="${VENDOR_DSH_BIN}"
+        echo "[DSH Addon] Using auto-installed DSH: ${DSH_BIN}"
+    else
+        rm -rf "${VENDOR_DIR}"
+        DSH_BIN="/usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js"
+        echo "[DSH Addon] WARNING: auto-install failed, falling back to built-in DSH"
+    fi
 fi
 export DSH_BIN
 

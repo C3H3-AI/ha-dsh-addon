@@ -142,7 +142,8 @@ class DSHClient:
                     headers=self._headers(),
                 ) as resp:
                     body = await resp.text()
-                    if resp.status != 200:
+                    # 桥接层成功时返回 202 Accepted（后台异步执行）；429 表示已在更新
+                    if resp.status not in (200, 202):
                         return {"ok": False, "error": f"status {resp.status}: {body[:200]}"}
                     try:
                         return await resp.json()

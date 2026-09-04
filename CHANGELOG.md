@@ -2,6 +2,22 @@
 
 本 addon 的版本变更记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.33] - 2026-09-04
+
+### 新增
+
+- **首次启动自动安装最新版（方案 A）**：新客户首次启动自动 `npm install @deepseek-ai/dsh@latest` 到持久化 `/data/dsh/vendor`，让新装即用稳定通道最新版；失败静默回退镜像内置版（离线兜底），下次启动自动重试。`run.sh` 新增 `install_dsh_vendor()` / `vendor_integrity_ok()`，与一键更新同源（npmmirror + vendor.tmp 原子切换）。
+
+### 变更
+
+- **内置版默认通道 `@next` → `@latest`**：Dockerfile 与首次自动安装均改走稳定通道（当前 `latest`/`next` 同指 `0.1.2-rc.1`）；手动一键更新保持 `next` 默认、可选 `latest`。
+
+### 修复
+
+- **按钮 202 契约**：`trigger_update()` 接受 200/202，修复“更新 DSH”按钮误报失败（桥接层成功返回 202，后台异步执行）。
+- **按钮国际化**：`button` 平台改用 `translation_key`（en/zh-Hans 生效，英文界面不再显示中文硬编码名）；更新按钮成功后即时推送 `last_update_version`。
+- **补齐 icon.png**：发布源集成目录补上 manifest 声明的 `icon.png`。
+
 ## [0.2.32] - 2026-08-30
 
 ### 新增

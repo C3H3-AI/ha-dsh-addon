@@ -78,3 +78,4 @@ class DSHUpdateButton(_DSHBaseButton):
             self._attr_extra_state_attributes = {
                 "last_update_version": result.get("version"),
             }
+            self.async_write_ha_state()
