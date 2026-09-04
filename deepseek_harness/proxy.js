@@ -110,6 +110,14 @@ const server = http.createServer((req, res) => {
     delete options.headers['x-ingress-path'];
     delete options.headers['proxy-connection'];
     delete options.headers['connection'];
+    // 关键修复：DSH web 按 Accept-Encoding 协商返回 gzip（响应带 vary: Accept-Encoding）。
+    // 本代理需要缓冲并改写 HTML/JS 响应体，若上游返回 gzip，缓冲到的是压缩二进制，
+    // 改写在乱码上必然失败；且响应会带着 content-encoding: gzip + 错误的 content-length
+    // 回传，Supervisor ingress 无法解码（日志 "Can not decode content-encoding: gzip"）
+    // → ingress 400/502，用户侧表现为"应用似乎尚未准备就绪"。
+    // 修复：转发请求时剥离 Accept-Encoding，强制上游返回未压缩响应。
+    delete options.headers['accept-encoding'];
+    delete options.headers['Accept-Encoding'];
     // 删除原有的 Host/Origin 头部（大小写都删，避免重复）
     delete options.headers['Host'];
     delete options.headers['host'];

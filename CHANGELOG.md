@@ -2,6 +2,15 @@
 
 本 addon 的版本变更记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.39] - 2026-09-05
+
+### 修复
+
+- **ingress 502 / Web UI 打不开（根因）**：DSH web 按 `Accept-Encoding` 协商返回 gzip 响应（响应带 `vary: Accept-Encoding`），而 addon 的 `proxy.js` 需要缓冲并改写 HTML/JS 响应体——它不解压 gzip，导致：
+  1. 改写在压缩二进制上必然失败（`<head>` 注入、ingress 前缀重写、isLoopback 改写全部失效）；
+  2. 响应带着 `content-encoding: gzip` + 错误的 `content-length` 回传，Supervisor ingress 解码失败（日志 `Can not decode content-encoding: gzip`）→ `Ingress error: 400` → 浏览器 502，HA 界面显示"应用似乎尚未准备就绪"。
+  - 修复：`proxy.js` 转发请求时剥离 `Accept-Encoding`，强制 DSH web 返回未压缩响应，恢复 ingress 下 Web UI 正常加载。实测直连 `Accept-Encoding: identity` 时响应无 gzip 头，协商行为确认。
+
 ## [0.2.38] - 2026-09-05
 
 ### 修复
