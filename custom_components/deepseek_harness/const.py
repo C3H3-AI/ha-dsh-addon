@@ -1,7 +1,7 @@
 """Constants for the DeepSeek Harness integration."""
 
 DOMAIN = "deepseek_harness"
-VERSION = "0.2.7"
+VERSION = "0.2.8"
 
 CONF_HOST = "host"
 CONF_PORT = "port"

@@ -2,7 +2,14 @@
 
 本 addon 的版本变更记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## \[0.2.36] - 2026-09-04
+## [0.2.37] - 2026-09-05
+
+### 修复
+
+- **凭据环境变量注入**：DSH 的 `.credentials.yaml` `refs` 块（`HAPROXY_API_KEY` / `DSH_FEISHU_APP_SECRET_*` 等）本应由 dsh-shell-env 自动注入进程环境，但实测 DSH 0.1.2-rc.1 在 profile 未完全初始化/容器重建重装后**不注入**，导致 llm-pi-ai 的 haproxy provider（`apiKeyEnv: HAPROXY_API_KEY`）读不到 key → 请求无认证头 → 上游 401 → LLM 调用报 `Cannot read properties of undefined (reading 'length')`。现于 `run.sh` 启动 DSH 前从 `.credentials.yaml` 提取 `refs` 块并 `export`（兜底，不依赖 DSH 注入机制）。
+- **启动提速**：launch token 轮询从 90 秒缩短到 10 秒——主认证路径已是 api_server.js 读取持久化 secret 自生成 Cookie，token 仅在可解析时作为兼容兜底。
+
+## [0.2.36] - 2026-09-04
 
 ### 修复
 
@@ -149,3 +156,4 @@
 
 - 初始/上一正式版本。见仓库历史提交记录。
 
+<br />

@@ -636,6 +636,33 @@ NODERELINK
 # 注意：DSH 安全限制，不允许绑定 0.0.0.0（安全原因：会暴露远程代码执行到网络）
 # 因此策略是：DSH 监听 127.0.0.1:3081，再启动 Node.js TCP 代理监听 0.0.0.0:3080 转发到 127.0.0.1:3081
 # 重要：DSH 和代理必须使用不同端口，因为 0.0.0.0:3080 包含 127.0.0.1，直接绑定会冲突（EADDRINUSE）
+
+# ===== 从 DSH 凭据库注入环境变量（refs 块）=====
+# .credentials.yaml 的 refs 块（`  KEY: value`，缩进 2 格）是进程环境变量型凭据，
+# 例如 HAPROXY_API_KEY / DSH_FEISHU_APP_SECRET_* / DSH_CONFIG_MANAGER_SYNC_TOKEN。
+# DSH 的 dsh-shell-env 机制本应在启动时自动注入，但在 profile 未完全初始化/容器重建
+# 重装后可能失效（实测 0.1.2-rc.1 下 HAPROXY_API_KEY 未进入进程 env），导致
+# llm-pi-ai 等 provider 读不到 key、LLM 调用 401/解析失败。这里在启动 DSH 前兜底 export。
+DSH_CRED_FILE="${DSH_HOME}/.credentials.yaml"
+if [ -f "${DSH_CRED_FILE}" ]; then
+    while IFS=: read -r cred_key cred_val; do
+        cred_key="${cred_key//[^A-Za-z0-9_]/}"
+        [ -z "${cred_key}" ] && continue
+        case "${cred_key}" in
+            version|refs|records|kind|payload|secret|grant) continue ;;
+        esac
+        # 去前导/尾随空格与首尾引号
+        cred_val="${cred_val#"${cred_val%%[![:space:]]*}"}"
+        cred_val="${cred_val%"${cred_val##*[![:space:]]}"}"
+        cred_val="${cred_val%\"}"; cred_val="${cred_val#\"}"
+        cred_val="${cred_val%\'}"; cred_val="${cred_val#\'}"
+        if [ -n "${cred_val}" ]; then
+            export "${cred_key}=${cred_val}"
+            echo "[DSH Addon]   exported credential env: ${cred_key} (len ${#cred_val})"
+        fi
+    done < <(grep -E '^  [A-Za-z_][A-Za-z0-9_]*: ' "${DSH_CRED_FILE}" 2>/dev/null)
+fi
+
 echo "[DSH Addon] Starting DeepSeek Harness Web UI on 127.0.0.1:3081..."
 cd "${DSH_WORKSPACE}" || true
 
@@ -669,11 +696,13 @@ done
 DSH_BRIDGE_COOKIE=""
 # 轮询等待 launch token 出现：dsh-web-app 要等 profile/loader 完全加载后才
 # 打印 "dsh web: http://127.0.0.1:3081/?token=..."（见 dsh-web-app announceReady），
-# 而端口就绪检测只证明 socket 已监听，不代表 token 已写出。这里最多等 90 秒。
+# 而端口就绪检测只证明 socket 已监听，不代表 token 已写出。实测 0.1.2-rc.1 在
+# profile 加载慢/无头时可能完全不打印，因此这里仅作短兜底（10 秒）——主认证路径
+# 是 api_server.js 读取持久化 secret 自生成 Cookie，不依赖 token。
 # 正则放宽为 [?&]token=（不限定完整 URL），并 tr -d '\r' 清理 CR（日志可能带 \r\n）。
 DSH_TOKEN=""
 echo "[DSH Addon] Waiting for DSH launch token in ${DSH_WEB_LOG}..."
-for i in $(seq 1 45); do
+for i in $(seq 1 5); do
     if [ -f "${DSH_WEB_LOG}" ]; then
         DSH_TOKEN=$(grep -oE '[?&]token=[A-Za-z0-9_-]+' "${DSH_WEB_LOG}" 2>/dev/null | tail -1 | sed 's/.*token=//' | tr -d '\r')
         if [ -n "${DSH_TOKEN}" ]; then
@@ -696,7 +725,7 @@ if [ -n "${DSH_TOKEN}" ]; then
         echo "[DSH Addon] WARNING: failed to exchange DSH launch token for cookie (bridge RPC may return 401)"
     fi
 else
-    echo "[DSH Addon] WARNING: no DSH launch token found after 90s in ${DSH_WEB_LOG} (bridge RPC may return 401)"
+    echo "[DSH Addon] WARNING: no DSH launch token found after 10s in ${DSH_WEB_LOG} (bridge uses self-generated cookie)"
     echo "[DSH Addon] DEBUG: last 40 lines of ${DSH_WEB_LOG}:"
     tail -n 40 "${DSH_WEB_LOG}" 2>/dev/null | sed 's/^/    /' || echo "    (log file unreadable)"
 fi
