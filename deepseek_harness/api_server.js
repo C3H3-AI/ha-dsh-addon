@@ -144,8 +144,9 @@ const DSH_BRIDGE_COOKIE = process.env.DSH_BRIDGE_COOKIE || (() => {
 
 // 单次 DSH web RPC 调用。rpcId 可选，供 session.prompt 用作文本流关联键。
 // DSH 0.1.2-rc+: endpoint 改为 <ns>/<method>（点转斜杠），payload 包装为
-// { args: { request: <原参数> } }（list 等个别方法参数名不同，见具体调用处）。
-async function dshRpc(method, payload, rpcId) {
+// { args: { <argName>: <原参数> } }。绝大多数方法参数名是 request，
+// session.list 等个别方法是 _request（argName 覆盖）。
+async function dshRpc(method, payload, rpcId, argName = 'request') {
   const wireMethod = method.replace(/\./g, '/');
   const headers = { 'content-type': 'application/json' };
   if (DSH_BRIDGE_COOKIE) headers['cookie'] = DSH_BRIDGE_COOKIE;
@@ -156,7 +157,7 @@ async function dshRpc(method, payload, rpcId) {
       type: 'client-request',
       rpcId: rpcId || 'dsh-bridge-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
       method: wireMethod,
-      payload: { args: { request: payload } },
+      payload: { args: { [argName]: payload } },
     }),
     signal: AbortSignal.timeout(30_000),
   });
@@ -174,16 +175,20 @@ async function dshRpc(method, payload, rpcId) {
   return body.result.value;
 }
 
+// 取会话当前最新事件 seq（session.list 的 projections.asOfSeq）。
+// DSH 0.1.2-rc+: session/page 是 backwards page，throughSeq 必须传已知最新 seq 才能
+// 读到该 seq 及之前的事件；throughSeq=-1 恒返回空。因此用 session.list（参数名 _request）
+// 拿最新 asOfSeq 作为 page 的 throughSeq。
+async function sessionAsOfSeq(sessionId) {
+  const list = await dshRpc('session.list', {}, null, '_request');
+  const items = list?.items ?? [];
+  const it = items.find((s) => s.sessionId === sessionId);
+  return it?.projections?.asOfSeq ?? -1;
+}
+
 // 取一个会话的历史事件基线 seq（避免把历史助手消息误当本次回复）
-// DSH 0.1.2-rc+: session.history 更名为 session/page（backwards page，records 是事件数组）。
 async function sessionBaselineSeq(sessionId) {
-  const page = await dshRpc('session.page', {
-    address: { kind: 'session', sessionId },
-    throughSeq: -1,
-    maxMessages: 1,
-  });
-  const records = page?.records ?? [];
-  return Math.max(-1, ...records.map((r) => r.event?.seq ?? -1));
+  return sessionAsOfSeq(sessionId);
 }
 
 // 挑选或创建会话：
@@ -221,6 +226,21 @@ function assistantText(ev) {
     .trim();
 }
 
+// 从任意事件 data 里尽力提取可读文本（0.1.2-rc+ 兜底，避免回复为空）
+function extractAnyText(data) {
+  if (!data || typeof data !== 'object') return '';
+  const walk = (node, out) => {
+    if (typeof node === 'string') { out.push(node); return; }
+    if (!node || typeof node !== 'object') return;
+    if (typeof node.text === 'string' && node.text) out.push(node.text);
+    if (Array.isArray(node.content)) { for (const c of node.content) walk(c, out); return; }
+    for (const v of Object.values(node)) { if (typeof v !== 'object') continue; walk(v, out); if (out.length > 200) return; }
+  };
+  const out = [];
+  walk(data, out);
+  return out.join('\n').trim();
+}
+
 // 多轮中继：prompt 后轮询 session.page，按 promptRpcId 关联并累计助手文本，
 // 到 turn/end 结束。超时抛错。
 async function relaySession(message, sessionId, timeoutMs = 120_000) {
@@ -237,6 +257,7 @@ async function relaySession(message, sessionId, timeoutMs = 120_000) {
 
   const tracker = {
     promptRpcId,
+    promptSeen: false,
     lastSeq: baselineSeq,
     openTurn: null,
     targetTurn: null,
@@ -245,13 +266,19 @@ async function relaySession(message, sessionId, timeoutMs = 120_000) {
     text: '',
   };
   const deadline = Date.now() + timeoutMs;
+  let lastFetchedAsOf = baselineSeq;
   while (Date.now() < deadline && !tracker.finished) {
     await sleep(400);
     let hist;
     try {
+      // session/page 是 backwards page：throughSeq 必须是最新 seq 才能读到事件。
+      // 每次轮询先用 session.list 取最新 asOfSeq，再拉 throughSeq=asOfSeq 的页。
+      const freshAsOf = await sessionAsOfSeq(sessionId);
+      if (freshAsOf <= lastFetchedAsOf) continue; // 无新事件
+      lastFetchedAsOf = freshAsOf;
       hist = await dshRpc('session.page', {
         address: { kind: 'session', sessionId },
-        throughSeq: -1,
+        throughSeq: freshAsOf,
         maxMessages: 100,
       });
     } catch (e) {
@@ -266,9 +293,18 @@ async function relaySession(message, sessionId, timeoutMs = 120_000) {
       const seq = ev.seq ?? -1;
       if (seq <= tracker.lastSeq) continue;
       tracker.lastSeq = seq;
-      if (ev.type === 'turn/start') { tracker.openTurn = ev.data?.turn ?? null; continue; }
-      if (ev.type === 'user/message' && ev.data?.source?.rpcId === tracker.promptRpcId) {
-        tracker.targetTurn = tracker.openTurn;
+      // DSH 0.1.2-rc+ 事件流没有 user/message：用户消息在 agent/inbox/spliced 的
+      // inserted[]（source.rpcId 关联 prompt）。turn/start 出现在 spliced 之后。
+      if (ev.type === 'agent/inbox/spliced') {
+        const inserted = ev.data?.inserted ?? [];
+        if (inserted.some((m) => m?.source?.kind === 'user' && m.source?.rpcId === tracker.promptRpcId)) {
+          tracker.promptSeen = true;
+        }
+        continue;
+      }
+      if (ev.type === 'turn/start') {
+        tracker.openTurn = ev.data?.turn ?? null;
+        if (tracker.promptSeen) tracker.targetTurn = tracker.openTurn;
         continue;
       }
       if (tracker.targetTurn === null) continue;
@@ -290,7 +326,11 @@ async function relaySession(message, sessionId, timeoutMs = 120_000) {
           .trim();
         if (text && text !== tracker.text) tracker.text = text;
       } else if (ev.type === 'assistant/message') {
-        const t = assistantText(ev);
+        const t = assistantText(ev) || extractAnyText(ev.data);
+        if (t && t !== tracker.text) tracker.text = t;
+      } else if (ev.type === 'assistant/delta') {
+        // 0.1.2-rc+ 可能用别的 assistant 事件承载文本；保守兜底
+        const t = extractAnyText(ev.data);
         if (t && t !== tracker.text) tracker.text = t;
       }
     }

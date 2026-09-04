@@ -2,6 +2,15 @@
 
 本 addon 的版本变更记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.38] - 2026-09-05
+
+### 修复
+
+- **会话中继适配 DSH 0.1.2-rc.1 事件流**：
+  - `session/page` 是 backwards page，`throughSeq=-1` 恒返回空事件。`relaySession` 每次轮询先用 `session.list`（参数名 `_request`）取最新 `projections.asOfSeq` 作为 `throughSeq`，恢复 HA 对话的事件拉取。
+  - 0.1.2-rc+ 事件流不再有 `user/message`：用户消息内嵌在 `agent/inbox/spliced` 的 `inserted[]`（`source.rpcId` 关联 prompt）。中继改为在 `spliced` 里标记 prompt 已见、在随后的 `turn/start` 绑定 `targetTurn`，修复回复文本缺失/错乱。
+  - 新增 `extractAnyText` 兜底提取（`assistant/message`、`assistant/delta` 等事件 `data` 任意结构），避免回复为空。
+
 ## [0.2.37] - 2026-09-05
 
 ### 修复
