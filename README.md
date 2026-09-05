@@ -24,7 +24,7 @@
 [license-url]: https://github.com/C3H3-AI/ha-dsh-addon/blob/main/LICENSE
 [last-commit-badge]: https://img.shields.io/github/last-commit/C3H3-AI/ha-dsh-addon.svg?style=flat-square
 [last-commit-url]: https://github.com/C3H3-AI/ha-dsh-addon/commits/main
-[addon-badge]: https://img.shields.io/badge/addon-0.2.33-4E9AEE.svg?style=flat-square
+[addon-badge]: https://img.shields.io/badge/addon-0.2.40-4E9AEE.svg?style=flat-square
 [addon-url]: https://github.com/C3H3-AI/ha-dsh-addon/blob/main/deepseek_harness/config.yaml
 [integration-badge]: https://img.shields.io/badge/integration-0.2.4-4E9AEE.svg?style=flat-square
 [integration-url]: https://github.com/C3H3-AI/ha-dsh-addon/blob/main/custom_components/deepseek_harness/manifest.json
@@ -97,7 +97,25 @@ DSH 处于测试期（rc.x），更新频繁。本 addon 提供 Web 一键更新
 | `latest` | npm 稳定 tag（当前 `0.1.2-rc.1`），方案 A 首次自动安装与镜像内置版默认目标 |
 | `next` | npm 预发布 tag（当前 `0.1.2-rc.1`，与 latest 相同），手动一键更新默认目标 |
 
+## DSH 兼容性
+
+addon 兼容层的目标是当前 DSH 版本线（`0.1.2-rc.1`，镜像内置与 vendor 自动安装同源）。针对 rc.1 的关键适配由 addon 自动完成，用户无感知：
+
+- **强制浏览器会话认证**（rc.1+ 对全部 API 401 拦截）：代理自动从持久化凭据生成签名 Cookie 并注入全部转发请求与 WebSocket，桥接层同样按需生成、401 自动重试。
+- **Ingress 查询串规范化**：HA ingress 转发会重编码查询串，破坏 DSH 插件打包器 URL（`/plugins/??列表&rev=x`）的精确匹配；代理自动还原。
+- 对不启用强制认证的旧版 DSH，上述注入/规范化均为无害空操作。
+
+DSH 上游若再变更加密方案、bundler URL 形态或 RPC 契约，需要发布新版 addon 适配（proxy 对关键改写点带有"上游模式变化"告警日志，可快速定位）。
+
 ## 变更日志
+
+### 0.2.40
+
+- 🐛 **修复 ingress 下 WebUI 401**：DSH 0.1.2-rc.1+ 强制浏览器会话认证，代理自动生成签名 Cookie 并注入 HTTP/WS 请求。
+- 🐛 **修复 ingress 下插件加载失败 "HTML did not preload"**：HA ingress 重编码查询串导致打包器 URL 404，代理自动规范化。
+- 🐛 **修复新装首启动桥接 401**：桥接 Cookie 改为惰性生成 + 401 重试，secret 晚于桥接启动也能自动恢复。
+- 🐛 **HTML 响应强制 no-store**：避免浏览器缓存旧版页面引用失效资产。
+- ✨ **侧边栏面板**：`panel: true`，安装后侧边栏出现 **DSH Agent** 入口。
 
 ### 0.2.33
 
@@ -128,7 +146,7 @@ DSH 处于测试期（rc.x），更新频繁。本 addon 提供 Web 一键更新
 - 排障与调试经验（踩坑实录、排查顺序、常用命令）：[docs/DEBUGGING.md](docs/DEBUGGING.md)
 
 - 本地测试：`node api_server.js`（需 `DSH_API_TOKEN` 环境变量）
-- 双轨版本号：addon 轨 `config.yaml` == `Dockerfile`（当前 `0.2.33`）；集成轨 `const.py` == `manifest.json`（当前 `0.2.4`）。两轨独立、不跨轨比较。CI 通过 `scripts/check-versions.sh` 校验各自一致。
+- 双轨版本号：addon 轨 `config.yaml` == `Dockerfile`（当前 `0.2.40`）；集成轨 `const.py` == `manifest.json`（当前 `0.2.4`）。两轨独立、不跨轨比较。CI 通过 `scripts/check-versions.sh` 校验各自一致。
 - 测试与 CI：桥接 API 契约测试在 `tests/`（随仓库提交），CI（`.github/workflows/ci.yml`）跑 lint + 版本校验 + 契约测试 + 镜像构建。
 
 ## License
