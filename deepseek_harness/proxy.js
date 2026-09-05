@@ -21,11 +21,92 @@
 
 const http = require('http');
 const net = require('net');
+const fs = require('fs');
+const crypto = require('crypto');
 
 const DSH_PORT = 3081;
 const PROXY_PORT = 3080;
 const BRIDGE_PORT = parseInt(process.env.DSH_API_PORT || '3082', 10);
 const BRIDGE_TOKEN = process.env.DSH_API_TOKEN || '';
+
+// ===== DSH 0.1.2-rc+ browser-session 认证注入 =====
+// DSH 0.1.2-rc.1 起对全部 API 强制 browser-session 认证，无有效 Cookie 一律 401
+// （"dsh web authentication required; reopen the URL printed by dsh web"）。
+// 浏览器经 Ingress 打开时天然不带 token，因此代理必须代为注入。
+// Cookie 生成方式与 api_server.js 完全一致：读取持久化签名 secret
+// ($DSH_HOME/.credentials.yaml 的 client-connection/browser-session 记录)，
+// 用 HMAC-SHA256 自行构造 authority 绑定 Cookie —— 等价于 launch token 交换
+// 产物，跨进程重启有效（secret 持久化），不依赖 dsh-web.log 里的 token 打印时机。
+function b64u(buf) {
+    return Buffer.from(buf).toString('base64').replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/u, '');
+}
+
+function readBrowserSessionSecret() {
+    const credPath = process.env.DSH_CREDENTIALS_PATH ||
+        (process.env.DSH_HOME || '/data/dsh') + '/.credentials.yaml';
+    try {
+        const text = fs.readFileSync(credPath, 'utf8');
+        const m = text.match(/client-connection\/browser-session:[\s\S]*?secret:\s*([A-Za-z0-9_-]+)/);
+        if (!m) return null;
+        const secret = Buffer.from(m[1], 'base64url');
+        if (secret.byteLength !== 32) return null;
+        return secret;
+    } catch {
+        return null;
+    }
+}
+
+function makeDshCookie(secret) {
+    const authority = '127.0.0.1:' + DSH_PORT;
+    const name = 'dsh-auth-' + b64u(crypto.createHash('sha256').update(authority).digest());
+    const now = Date.now();
+    const body = b64u(Buffer.from(JSON.stringify({
+        version: 1,
+        authority,
+        issuedAt: now,
+        expiresAt: now + 30 * 24 * 60 * 60 * 1000,
+    }), 'utf8'));
+    const sig = b64u(crypto.createHmac('sha256', secret).update(body).digest());
+    return name + '=' + 'v1.' + body + '.' + sig;
+}
+
+let cachedDshCookie = '';
+function getDshCookie() {
+    if (cachedDshCookie) return cachedDshCookie;
+    const fromEnv = process.env.DSH_BRIDGE_COOKIE;
+    if (fromEnv) {
+        cachedDshCookie = fromEnv;
+        return cachedDshCookie;
+    }
+    const secret = readBrowserSessionSecret();
+    if (secret) {
+        cachedDshCookie = makeDshCookie(secret);
+        log('[DSH Addon] browser-session cookie generated from persisted secret (proxy inject mode)');
+        return cachedDshCookie;
+    }
+    log('[DSH Addon] WARNING: no browser-session cookie available yet (will retry on next request)');
+    return '';
+}
+
+function invalidateDshCookie() {
+    if (cachedDshCookie) {
+        cachedDshCookie = '';
+        log('[DSH Addon] browser-session cookie invalidated (upstream 401), will regenerate');
+    }
+}
+
+// 把认证 Cookie 注入转发请求头：剥离浏览器可能带来的 dsh-auth-*（属于外部域，
+// 对 3081 authority 无效甚至干扰），再写入自生成 Cookie。
+function injectDshCookie(headers) {
+    const cookie = getDshCookie();
+    if (!cookie) return;
+    const parts = (headers['cookie'] || '')
+        .split(';')
+        .map(s => s.trim())
+        .filter(s => s && !s.startsWith('dsh-auth-'));
+    parts.push(cookie);
+    headers['cookie'] = parts.join('; ');
+}
 
 function log() {
     const args = ['[' + new Date().toISOString() + ']'].concat(Array.from(arguments));
@@ -57,6 +138,16 @@ const server = http.createServer((req, res) => {
         if (targetPath === '') {
             targetPath = '/';
         }
+    }
+
+    // HA Supervisor ingress（aiohttp/yarl）会重新编码查询串：对 DSH 插件打包器的
+    // `??a.js,b.js&rev=x` 形态 URL，空值键会被补上 `=`（变成 `...client.js=&rev=...`），
+    // 破坏 DSH 对该路径的精确匹配 → 404 → 插件 bootstrap 脚本加载失败 →
+    // 浏览器报 "HTML did not preload @deepseek-ai/dsh-client-modules/client.js"。
+    // 在转发前把 ingress 注入的多余 `=` 还原。
+    if (targetPath.includes('/plugins/??') && targetPath.includes('=&rev=')) {
+        targetPath = targetPath.replace('=&rev=', '&rev=');
+        log('[HTTP-' + reqId + ']', 'normalized ingress-mangled bundler URL');
     }
 
     // 一键更新端点：/__dsh_update* -> bridge API :3082（代理注入 token，浏览器无需持有）
@@ -132,6 +223,9 @@ const server = http.createServer((req, res) => {
     // origin 需要显式设置
     options.headers['origin'] = 'http://127.0.0.1:' + DSH_PORT;
 
+    // DSH 0.1.2-rc+ 强制 browser-session 认证：注入自生成 Cookie
+    injectDshCookie(options.headers);
+
     // DEBUG: 记录发送给 DSH 后端的请求头
     log('[HTTP-' + reqId + ']', 'sending headers:', JSON.stringify({
         host: options.headers['host'],
@@ -144,6 +238,12 @@ const server = http.createServer((req, res) => {
         const h = Object.assign({}, headers);
         delete h['transfer-encoding'];
         delete h['content-length'];
+        // index.html 无缓存头，浏览器会启发式缓存旧版 HTML；DSH 升级/重启后资产
+        // 文件名（哈希）变化，旧 HTML 引用的资产 404，插件加载器报
+        // "HTML did not preload"。HTML 一律禁止缓存；资产文件名自带哈希，不受影响。
+        if ((h['content-type'] || '').includes('text/html')) {
+            h['cache-control'] = 'no-store';
+        }
         return h;
     };
 
@@ -152,6 +252,12 @@ const server = http.createServer((req, res) => {
         const isHtml = contentType.includes('text/html');
 
         log('[HTTP-' + reqId + ']', 'response:', proxyRes.statusCode, 'type:', contentType);
+
+        // 上游 401 说明缓存的 Cookie 已失效（如 .credentials.yaml 重建后 secret 轮换），
+        // 作废缓存，下次请求自动用新 secret 重新生成。
+        if (proxyRes.statusCode === 401) {
+            invalidateDshCookie();
+        }
 
         // 提取路径部分（去除查询参数），用于 URL 匹配
         // 浏览器加载 ES Module 时可能带 ?rev=xxx 或 ?t=timestamp 等缓存清除参数
@@ -488,6 +594,10 @@ server.on('upgrade', (req, socket, head) => {
             targetPath = '/';
         }
     }
+    // 与 HTTP 路径相同的 ingress 查询串规范化（见请求处理函数内注释）
+    if (targetPath.includes('/plugins/??') && targetPath.includes('=&rev=')) {
+        targetPath = targetPath.replace('=&rev=', '&rev=');
+    }
 
     // 提取关键 WebSocket 头部
     const wsKey = req.headers['sec-websocket-key'] || '(none)';
@@ -502,6 +612,7 @@ server.on('upgrade', (req, socket, head) => {
     const proxySocket = net.connect(DSH_PORT, '127.0.0.1', () => {
         connected = true;
         var upgradeReq = req.method + ' ' + targetPath + ' HTTP/1.1\r\n';
+        var wsCookieInjected = false;
         for (var i = 0; i < req.rawHeaders.length; i += 2) {
             var key = req.rawHeaders[i];
             var value = req.rawHeaders[i + 1];
@@ -515,7 +626,26 @@ server.on('upgrade', (req, socket, head) => {
             // 覆盖 Origin 头部为 DSH 实际地址，否则浏览器发送的 Origin: https://<外部反代域名>
             // 与 Host: 127.0.0.1:3081 不匹配，导致 403
             if (key.toLowerCase() === 'origin') { value = 'http://127.0.0.1:' + DSH_PORT; }
+            // 浏览器带来的 dsh-auth-* Cookie 属于外部域，对 3081 authority 无效，
+            // 跳过后由下方统一注入代理自生成的有效 Cookie
+            if (key.toLowerCase() === 'cookie') {
+                var filtered = value.split(';').map(function(s){ return s.trim(); })
+                    .filter(function(s){ return s && s.indexOf('dsh-auth-') !== 0; });
+                wsCookieInjected = true;
+                var cookie = getDshCookie();
+                if (cookie) filtered.push(cookie);
+                if (filtered.length > 0) {
+                    upgradeReq += 'Cookie: ' + filtered.join('; ') + '\r\n';
+                }
+                continue;
+            }
             upgradeReq += key + ': ' + value + '\r\n';
+        }
+        if (!wsCookieInjected) {
+            var wsCookie = getDshCookie();
+            if (wsCookie) {
+                upgradeReq += 'Cookie: ' + wsCookie + '\r\n';
+            }
         }
         upgradeReq += '\r\n';
         proxySocket.write(upgradeReq + head.toString('binary'), 'binary');

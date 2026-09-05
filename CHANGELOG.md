@@ -2,6 +2,19 @@
 
 本 addon 的版本变更记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.40] - 2026-09-05
+
+### 修复
+
+- **桥接 Cookie 惰性获取（新装首启动）**：新装机器首次启动时 DSH 的 `.credentials.yaml`（browser-session 签名 secret）在 bridge 启动之后才生成，`api_server.js` 启动时一次性计算 Cookie 会得到空值且整进程 401（HA 对话中继失效，直到手动重启 addon）。改为按需计算 + 401 自动作废重取，secret 一就绪即自动恢复，无需重启。
+- **HA Ingress 下插件加载失败 "HTML did not preload"（第二根因）**：HA Supervisor ingress（aiohttp/yarl）转发请求时会重新编码查询串——DSH 插件打包器 URL 的形态是 `/plugins/??文件列表&rev=x`，其空值键被补 `=` 变成 `/plugins/??...client.js=&rev=...`，破坏 DSH 对该路径的精确匹配 → 404 → 插件 bootstrap 脚本（含 `dsh-client-modules`）加载失败，浏览器报 `client-modules: HTML did not preload ...`。此前该问题在 ingress 模拟（URL 原样转发）下无法复现，只有经真实 Supervisor ingress 才触发。
+  - 修复：`proxy.js` 对含 `/plugins/??` 且带 `=&rev=` 的请求路径规范化还原（`=&rev=` → `&rev=`），HTTP 与 WebSocket upgrade 两条路径都处理。实测被改坏形态的 bootstrap 与 4.3MB 完整插件 bundle 均恢复 200。
+- **WebUI 401 "dsh web authentication required"（根因）**：DSH 0.1.2-rc.1 对全部 API 强制 browser-session 认证，浏览器经 HA Ingress 打开 WebUI 时天然不带 launch token，`proxy.js` 转发请求也不注入任何认证 Cookie，DSH 一律返回 401（`dsh web authentication required; reopen the URL printed by dsh web`）。
+  - 修复：`proxy.js` 新增 browser-session Cookie 自动获取与注入——从持久化签名 secret（`$DSH_HOME/.credentials.yaml` 的 `client-connection/browser-session` 记录）用 HMAC-SHA256 自行构造 authority 绑定 Cookie（与 `api_server.js` 同算法，跨进程重启有效、不依赖 `dsh-web.log` 里 launch token 的打印时机），注入到全部转发的 HTTP 请求与 WebSocket upgrade；上游 401 时自动作废缓存、下次请求用新 secret 重新生成；浏览器自带的 `dsh-auth-*`（属于外部域，对 3081 authority 无效）会被剥离避免干扰。
+  - `run.sh` 的 `hasFix()` 增加 `injectDshCookie` 标记，确保 `proxy.fixed.js` 基线机制能把带 Cookie 注入的版本正确恢复到 `/proxy.js`（否则镜像内置旧版因"已有 Ingress 修复标记"而被跳过，修复无法落地）。
+  - 实测：ingress 模拟请求 `GET /` 200（HTML 正确注入 base/前缀重写脚本）、`POST /api/settings/mutate` 200（RPC 认证通过）。
+- 部署提示：修复随镜像重建生效（`ha addons rebuild`）。热修路径为容器内 `/proxy.js` + `/data/dsh/proxy.fixed.js`（持久化）+ 杀掉 proxy 进程由自愈循环拉起。
+
 ## [0.2.39] - 2026-09-05
 
 ### 修复

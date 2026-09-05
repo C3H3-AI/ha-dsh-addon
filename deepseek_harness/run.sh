@@ -770,7 +770,9 @@ function hasFix(src) {
   const hasOriginFix = src.indexOf('u.origin !== ORIGIN') === -1;            // 旧的 origin 比较已移除
   const hasIframeHook = src.indexOf('HTMLIFrameElement') !== -1;             // iframe hook 存在
   const hasScriptHook = src.indexOf('HTMLScriptElement') !== -1;             // script hook 存在
-  return hasOriginFix && hasIframeHook && hasScriptHook;
+  // browser-session Cookie 注入（DSH 0.1.2-rc+ 强制认证，ingress 下必须由代理注入）
+  const hasCookieInject = src.indexOf('injectDshCookie') !== -1;
+  return hasOriginFix && hasIframeHook && hasScriptHook && hasCookieInject;
 }
 
 // 若持久化目录没有正确版本，尝试从当前（可能已修复的）/proxy.js 建立基准

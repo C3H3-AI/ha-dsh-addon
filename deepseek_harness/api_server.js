@@ -131,36 +131,56 @@ function makeDshCookie(secret) {
 }
 
 // DSH browser-session cookie。优先取 run.sh 换取的（兼容旧流程），否则自生成。
-const DSH_BRIDGE_COOKIE = process.env.DSH_BRIDGE_COOKIE || (() => {
+// 惰性获取：新装机器首次启动时 DSH 尚未写出 .credentials.yaml（profile 初始化
+// 在 bridge 启动之后），启动时一次性计算会得到空 Cookie 且整进程 401。
+// 改为按需计算 + 失效重试：secret 一旦出现即自动恢复，无需重启 addon。
+let cachedBridgeCookie = process.env.DSH_BRIDGE_COOKIE || '';
+function getBridgeCookie() {
+  if (cachedBridgeCookie) return cachedBridgeCookie;
   const secret = readBrowserSessionSecret();
   if (secret) {
-    const cookie = makeDshCookie(secret);
+    cachedBridgeCookie = makeDshCookie(secret);
     console.log('[DSH Addon] browser-session cookie generated from persisted secret');
-    return cookie;
+    return cachedBridgeCookie;
   }
-  console.warn('[DSH Addon] WARNING: no browser-session cookie available (bridge RPC will 401)');
+  console.warn('[DSH Addon] WARNING: browser-session secret not available yet (will retry on next RPC)');
   return '';
-})();
+}
+function invalidateBridgeCookie() {
+  if (cachedBridgeCookie) {
+    cachedBridgeCookie = '';
+    console.warn('[DSH Addon] bridge cookie invalidated (upstream 401), will regenerate from secret');
+  }
+}
 
 // 单次 DSH web RPC 调用。rpcId 可选，供 session.prompt 用作文本流关联键。
 // DSH 0.1.2-rc+: endpoint 改为 <ns>/<method>（点转斜杠），payload 包装为
 // { args: { <argName>: <原参数> } }。绝大多数方法参数名是 request，
 // session.list 等个别方法是 _request（argName 覆盖）。
+// 401 时自动作废 Cookie 重取一次再试（覆盖 secret 轮换/首次启动未就绪）。
 async function dshRpc(method, payload, rpcId, argName = 'request') {
   const wireMethod = method.replace(/\./g, '/');
-  const headers = { 'content-type': 'application/json' };
-  if (DSH_BRIDGE_COOKIE) headers['cookie'] = DSH_BRIDGE_COOKIE;
-  const res = await fetch(DSH_WEB_ORIGIN + '/api/' + wireMethod, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      type: 'client-request',
-      rpcId: rpcId || 'dsh-bridge-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
-      method: wireMethod,
-      payload: { args: { [argName]: payload } },
-    }),
-    signal: AbortSignal.timeout(30_000),
-  });
+  const doCall = async () => {
+    const headers = { 'content-type': 'application/json' };
+    const cookie = getBridgeCookie();
+    if (cookie) headers['cookie'] = cookie;
+    return fetch(DSH_WEB_ORIGIN + '/api/' + wireMethod, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        type: 'client-request',
+        rpcId: rpcId || 'dsh-bridge-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
+        method: wireMethod,
+        payload: { args: { [argName]: payload } },
+      }),
+      signal: AbortSignal.timeout(30_000),
+    });
+  };
+  let res = await doCall();
+  if (res.status === 401) {
+    invalidateBridgeCookie();
+    res = await doCall();
+  }
   if (!res.ok) {
     throw new Error('DSH web ' + wireMethod + ' 返回 HTTP ' + res.status);
   }
