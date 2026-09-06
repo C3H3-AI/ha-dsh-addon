@@ -2,12 +2,6 @@
 
 本 addon 的版本变更记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [0.2.42] - 2026-09-06
-
-### 修复
-
-- **聚合包改写对老访客不生效（浏览器缓存）**：0.2.41 的 isLoopback 改写按内容生效，但聚合包 URL（含 rev）不变且响应无可缓存校验头，浏览器继续沿用缓存里的旧（未改写）包，用户侧症状不变。现给 HTML 里的 bundler URL 追加缓存指纹参数 `&px=<PROXY_BUNDLE_FIX_REV>`（代理转发前剥离，DSH 仍只认原始 rev）：代理改写行为变化时递增该常量，URL 随之变化，浏览器自动拉取新包，无需用户强刷。
-
 ## [0.2.41] - 2026-09-06
 
 ### 修复
