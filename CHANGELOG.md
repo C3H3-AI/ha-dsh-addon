@@ -2,12 +2,6 @@
 
 本 addon 的版本变更记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [0.2.43] - 2026-09-06
-
-### 修复
-
-- **isLoopback 改写仍未到达浏览器（真实取包路径）**：用户控制台日志显示带指纹的聚合包 "preloaded but not used"——模块系统实际按内联 `__DSH_BOOT__` 图 JSON 里的 per-module URL（`"url":"...&rev=55f...-N"`，共 49 条）取包，而非 href/src 属性指向的聚合 URL。0.2.42 的指纹只加在 href/src 上，图 URL 不变 → 浏览器继续命中缓存旧包 → memory 后端 → "settings are unavailable in this browser" / 弹窗语言重置。现对图 JSON 的 "url" 形式同样追加 `&px=N`（普通 &、rev 含 -N 后缀），指纹剥离兼容任意历史版本（`&px=<digits>`）。实测 dsh-client-connection 的 per-module URL 返回内容含 `isLoopback: true`。
-
 ## [0.2.42] - 2026-09-06
 
 ### 修复
