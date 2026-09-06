@@ -24,7 +24,7 @@
 [license-url]: https://github.com/C3H3-AI/ha-dsh-addon/blob/main/LICENSE
 [last-commit-badge]: https://img.shields.io/github/last-commit/C3H3-AI/ha-dsh-addon.svg?style=flat-square
 [last-commit-url]: https://github.com/C3H3-AI/ha-dsh-addon/commits/main
-[addon-badge]: https://img.shields.io/badge/addon-0.2.41-4E9AEE.svg?style=flat-square
+[addon-badge]: https://img.shields.io/badge/addon-0.2.42-4E9AEE.svg?style=flat-square
 [addon-url]: https://github.com/C3H3-AI/ha-dsh-addon/blob/main/deepseek_harness/config.yaml
 [integration-badge]: https://img.shields.io/badge/integration-0.2.4-4E9AEE.svg?style=flat-square
 [integration-url]: https://github.com/C3H3-AI/ha-dsh-addon/blob/main/custom_components/deepseek_harness/manifest.json
@@ -109,6 +109,10 @@ DSH 上游若再变更加密方案、bundler URL 形态或 RPC 契约，需要�
 
 ## 变更日志
 
+### 0.2.42
+
+- 🐛 **修复聚合包改写对老访客不生效**：聚合包 URL 不变且无可缓存校验头，浏览器沿用缓存里的旧包。现给 bundler URL 追加代理版本指纹参数 `&px=N`（转发前剥离），代理改写行为变化时浏览器自动拉取新包，普通刷新即可生效。
+
 ### 0.2.41
 
 - 🐛 **修复 Ingress 下设置不持久**：DSH 0.1.2-rc.1 起插件代码经 `/plugins/??` 聚合包下发且 isLoopback 计算形态变更，原改写未命中导致设置后端退化为 memory（弹窗/语言每次重置、报 "settings are unavailable in this browser"）。代理现对聚合包按新形态强制 `isLoopback: true`，设置恢复正常持久化。
@@ -150,7 +154,7 @@ DSH 上游若再变更加密方案、bundler URL 形态或 RPC 契约，需要�
 - 排障与调试经验（踩坑实录、排查顺序、常用命令）：[docs/DEBUGGING.md](docs/DEBUGGING.md)
 
 - 本地测试：`node api_server.js`（需 `DSH_API_TOKEN` 环境变量）
-- 双轨版本号：addon 轨 `config.yaml` == `Dockerfile`（当前 `0.2.41`）；集成轨 `const.py` == `manifest.json`（当前 `0.2.4`）。两轨独立、不跨轨比较。CI 通过 `scripts/check-versions.sh` 校验各自一致。
+- 双轨版本号：addon 轨 `config.yaml` == `Dockerfile`（当前 `0.2.42`）；集成轨 `const.py` == `manifest.json`（当前 `0.2.4`）。两轨独立、不跨轨比较。CI 通过 `scripts/check-versions.sh` 校验各自一致。
 - 测试与 CI：桥接 API 契约测试在 `tests/`（随仓库提交），CI（`.github/workflows/ci.yml`）跑 lint + 版本校验 + 契约测试 + 镜像构建。
 
 ## License

@@ -29,6 +29,13 @@ const PROXY_PORT = 3080;
 const BRIDGE_PORT = parseInt(process.env.DSH_API_PORT || '3082', 10);
 const BRIDGE_TOKEN = process.env.DSH_API_TOKEN || '';
 
+// 聚合包缓存指纹：代理对 /plugins/?? 聚合包做内容改写（isLoopback 等），但 DSH 的
+// rev 只随上游构建变化，代理改写行为变化时 URL 不变，浏览器会沿用缓存里的旧
+// （未改写）包——设置持久化修复因此曾对老访客不生效。HTML 里的 bundler URL 会
+// 被追加 &px=<本常量> 作为缓存指纹；代理收到请求后剥离该参数再转发（DSH 只认
+// 原始 rev）。**代理的改写行为有变化时必须递增此常量**。
+const PROXY_BUNDLE_FIX_REV = '2';
+
 // ===== DSH 0.1.2-rc+ browser-session 认证注入 =====
 // DSH 0.1.2-rc.1 起对全部 API 强制 browser-session 认证，无有效 Cookie 一律 401
 // （"dsh web authentication required; reopen the URL printed by dsh web"）。
@@ -145,9 +152,15 @@ const server = http.createServer((req, res) => {
     // 破坏 DSH 对该路径的精确匹配 → 404 → 插件 bootstrap 脚本加载失败 →
     // 浏览器报 "HTML did not preload @deepseek-ai/dsh-client-modules/client.js"。
     // 在转发前把 ingress 注入的多余 `=` 还原。
-    if (targetPath.includes('/plugins/??') && targetPath.includes('=&rev=')) {
-        targetPath = targetPath.replace('=&rev=', '&rev=');
-        log('[HTTP-' + reqId + ']', 'normalized ingress-mangled bundler URL');
+    if (targetPath.includes('/plugins/??')) {
+        // 剥离 HTML 改写时附加的缓存指纹参数（DSH 只认原始 rev）
+        if (targetPath.includes('&px=' + PROXY_BUNDLE_FIX_REV)) {
+            targetPath = targetPath.replace(new RegExp('&px=' + PROXY_BUNDLE_FIX_REV, 'g'), '');
+        }
+        if (targetPath.includes('=&rev=')) {
+            targetPath = targetPath.replace('=&rev=', '&rev=');
+            log('[HTTP-' + reqId + ']', 'normalized ingress-mangled bundler URL');
+        }
     }
 
     // 一键更新端点：/__dsh_update* -> bridge API :3082（代理注入 token，浏览器无需持有）
@@ -329,6 +342,14 @@ const server = http.createServer((req, res) => {
                     return attr + '="' + ingressPath + '/' + path + '"';
                 });
                 body = body.replace(/"url"\s*:\s*"\/plugins\//g, '"url":"' + ingressPath + '/plugins/');
+
+                // 聚合包缓存指纹：给 bundler URL 追加 &px=<PROXY_BUNDLE_FIX_REV>，
+                // 使代理改写行为变化后浏览器自动拉取新包（代理转发前会剥离该参数）。
+                // 注意 HTML 属性里 & 需写成 &amp;。
+                body = body.replace(
+                    /(\/plugins\/\?\?[^"'<>]*?)&amp;rev=([A-Za-z0-9]+)/g,
+                    '$1&amp;rev=$2&amp;px=' + PROXY_BUNDLE_FIX_REV
+                );
 
                 // ===== 通用 Ingress 路径修复脚本 =====
                 // 核心问题：DSH SPA 通过 fetch/WebSocket/XHR/SSE 请求后端，但 HA Ingress
