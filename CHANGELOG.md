@@ -2,6 +2,25 @@
 
 本 addon 的版本变更记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.43] - 2026-09-06
+
+### 修复
+
+- **isLoopback 改写仍未到达浏览器（真实取包路径）**：用户控制台日志显示带指纹的聚合包 "preloaded but not used"——模块系统实际按内联 `__DSH_BOOT__` 图 JSON 里的 per-module URL（`"url":"...&rev=55f...-N"`，共 49 条）取包，而非 href/src 属性指向的聚合 URL。0.2.42 的指纹只加在 href/src 上，图 URL 不变 → 浏览器继续命中缓存旧包 → memory 后端 → "settings are unavailable in this browser" / 弹窗语言重置。现对图 JSON 的 "url" 形式同样追加 `&px=N`（普通 &、rev 含 -N 后缀），指纹剥离兼容任意历史版本（`&px=<digits>`）。实测 dsh-client-connection 的 per-module URL 返回内容含 `isLoopback: true`。
+
+## [0.2.42] - 2026-09-06
+
+### 修复
+
+- **聚合包改写对老访客不生效（浏览器缓存）**：0.2.41 的 isLoopback 改写按内容生效，但聚合包 URL（含 rev）不变且响应无可缓存校验头，浏览器继续沿用缓存里的旧（未改写）包，用户侧症状不变。现给 HTML 里的 bundler URL 追加缓存指纹参数 `&px=<PROXY_BUNDLE_FIX_REV>`（代理转发前剥离，DSH 仍只认原始 rev）：代理改写行为变化时递增该常量，URL 随之变化，浏览器自动拉取新包，无需用户强刷。
+
+## [0.2.41] - 2026-09-06
+
+### 修复
+
+- **Ingress 下设置不持久 / "settings are unavailable in this browser"（根因）**：DSH 0.1.2-rc.1 起全部插件 client.js 经 `/plugins/??` 聚合包下发，此前针对独立路径 `dsh-client-connection/client.js` 的 isLoopback 改写从未命中；且 rc.1 的计算形态已变为 `isLoopback: transport?.ownsHost === true || pageLocation === void 0 || isLoopbackHostname(pageLocation.hostname)`（HTML 注入的 hostname 补丁在该判定路径上不生效）。isLoopback=false 时设置持久化后端退化为 "memory"：弹窗状态/语言每次刷新重置，设置型功能（如加载提供方目录）报 "settings are unavailable in this browser"。
+  - 修复：`proxy.js` 对 `/plugins/??` 聚合包与独立路径都做 isLoopback 改写，覆盖 rc.1 新形态与旧形态；聚合包只做精确替换（4MB+ 代码不做宽泛兜底，避免误伤其他插件），未命中时输出上游模式变化告警。实测聚合包内 `isLoopback: true` 替换成功，设置持久化恢复 "host" 后端。
+
 ## [0.2.40] - 2026-09-05
 
 ### 修复

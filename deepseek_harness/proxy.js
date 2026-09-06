@@ -29,6 +29,14 @@ const PROXY_PORT = 3080;
 const BRIDGE_PORT = parseInt(process.env.DSH_API_PORT || '3082', 10);
 const BRIDGE_TOKEN = process.env.DSH_API_TOKEN || '';
 
+// 聚合包缓存指纹：代理对 /plugins/?? 聚合包做内容改写（isLoopback 等），但 DSH 的
+// rev 只随上游构建变化，代理改写行为变化时 URL 不变，浏览器会沿用缓存里的旧
+// （未改写）包——设置持久化修复因此曾对老访客不生效。HTML 里 bundler URL 的两种
+// 形态（href/src 属性、__DSH_BOOT__ 图 JSON 的 "url":"..."——后者才是模块系统实际
+// 取包用的 per-module URL）都会被追加 &px=<本常量> 作为缓存指纹；代理收到请求后
+// 剥离该参数再转发（DSH 只认原始 rev）。**代理的改写行为有变化时必须递增此常量**。
+const PROXY_BUNDLE_FIX_REV = '3';
+
 // ===== DSH 0.1.2-rc+ browser-session 认证注入 =====
 // DSH 0.1.2-rc.1 起对全部 API 强制 browser-session 认证，无有效 Cookie 一律 401
 // （"dsh web authentication required; reopen the URL printed by dsh web"）。
@@ -145,9 +153,15 @@ const server = http.createServer((req, res) => {
     // 破坏 DSH 对该路径的精确匹配 → 404 → 插件 bootstrap 脚本加载失败 →
     // 浏览器报 "HTML did not preload @deepseek-ai/dsh-client-modules/client.js"。
     // 在转发前把 ingress 注入的多余 `=` 还原。
-    if (targetPath.includes('/plugins/??') && targetPath.includes('=&rev=')) {
-        targetPath = targetPath.replace('=&rev=', '&rev=');
-        log('[HTTP-' + reqId + ']', 'normalized ingress-mangled bundler URL');
+    if (targetPath.includes('/plugins/??')) {
+        // 剥离 HTML 改写时附加的缓存指纹参数（任意历史版本，DSH 只认原始 rev）
+        if (/&px=[A-Za-z0-9]+/.test(targetPath)) {
+            targetPath = targetPath.replace(/&px=[A-Za-z0-9]+/g, '');
+        }
+        if (targetPath.includes('=&rev=')) {
+            targetPath = targetPath.replace('=&rev=', '&rev=');
+            log('[HTTP-' + reqId + ']', 'normalized ingress-mangled bundler URL');
+        }
     }
 
     // 一键更新端点：/__dsh_update* -> bridge API :3082（代理注入 token，浏览器无需持有）
@@ -271,27 +285,46 @@ const server = http.createServer((req, res) => {
         // 在 HA Ingress 下 hostname 是外部反代/Ingress 域名，永远判定为非 loopback。
         // 注入脚本覆盖 Location.prototype.hostname 因浏览器不可配置(Non-configurable)而失效。
         // 因此这里在代理层直接改写该插件模块源码：把 isLoopback 计算替换为常量 true。
-        if (pathOnly.endsWith('/plugins/@deepseek-ai/dsh-client-connection/client.js') &&
+        // DSH 0.1.2-rc.1 起插件 client.js 全部经 /plugins/?? 聚合包下发（不再有独立
+        // 路径），且 isLoopback 计算形态已变为
+        //   isLoopback: transport?.ownsHost === true || pageLocation === void 0
+        //               || isLoopbackHostname(pageLocation.hostname)
+        // 在 HA Ingress 下 hostname 是外部地址 -> isLoopback=false -> 设置持久化后端
+        // 退化为 "memory"，表现为：弹窗状态/语言每次重置、设置型功能报
+        // "settings are unavailable in this browser"。因此对独立路径与聚合包都做改写，
+        // 并同时覆盖新旧两种代码形态，把 isLoopback 强制为 true。
+        // 注意：聚合包的 ?? 在查询串里，pathOnly（按 ? 切分）只剩 /plugins/，
+        // 判断必须用含查询串的 targetPath。
+        if ((pathOnly.endsWith('/plugins/@deepseek-ai/dsh-client-connection/client.js') ||
+             targetPath.includes('/plugins/??')) &&
             (contentType.includes('javascript') || contentType.includes('application/json') || isHtml)) {
             let body = '';
             proxyRes.on('data', (chunk) => { body += chunk.toString(); });
             proxyRes.on('end', () => {
                 if (body.indexOf('isLoopback') !== -1) {
-                    // 未压缩 ESM 精确替换：isLoopback: (...isLoopbackHostname...) -> isLoopback: true
+                    const isBundle = targetPath.includes('/plugins/??');
+                    // rc.1 聚合包形态（精确匹配 handle 构造处的整个表达式）
+                    body = body.replace(
+                        /isLoopback:\s*transport\?\.\s*ownsHost\s*===\s*true\s*\|\|\s*pageLocation\s*===\s*void\s*0\s*\|\|\s*isLoopbackHostname\(\s*pageLocation\.hostname\s*\)/g,
+                        'isLoopback: true'
+                    );
+                    // rc.1 之前的独立 client.js 形态
                     body = body.replace(
                         /isLoopback:\s*pageLocation\s*===\s*void\s*0\s*\|\|\s*isLoopbackHostname\(\s*pageLocation\.hostname\s*\)\s*?[,;}]/g,
                         'isLoopback: true,'
                     );
-                    // 若未命中精确模式，做兜底：将其它任何非 true 的 isLoopback: 赋值强制为 true
-                    if (body.indexOf('isLoopback: true') === -1) {
+                    // 兜底：仅对独立 client.js 做（聚合包数 MB，宽泛替换可能误伤其他插件代码）
+                    if (!/isLoopback:\s*true/.test(body) && !isBundle) {
                         body = body.replace(/isLoopback:\s*(?!true)[^,]+,/g, 'isLoopback: true,');
                     }
-                    // 降级检测：精确替换 + 兜底替换都未命中 -> 上游 DSH 可能改了变量名/结构
-                    if (body.indexOf('isLoopback: true') === -1) {
-                        log('[HTTP-' + reqId + ']', 'WARNING: DSH client.js isLoopback pattern changed upstream! ' +
-                            'Persistence may be degraded (settings not saved). Please check DSH version.');
+                    if (/isLoopback:\s*true/.test(body)) {
+                        log('[HTTP-' + reqId + ']', isBundle
+                            ? 'aggregated bundle isLoopback forced to true'
+                            : 'dsh-client-connection isLoopback forced to true');
                     } else {
-                        log('[HTTP-' + reqId + ']', 'dsh-client-connection isLoopback forced to true');
+                        log('[HTTP-' + reqId + ']', 'WARNING: DSH isLoopback pattern changed upstream! ' +
+                            'Settings persistence will degrade to memory (dialog/language reset on reload). ' +
+                            'Please check DSH version.');
                     }
                 }
                 const headers = cleanHeaders(proxyRes.headers);
@@ -310,6 +343,22 @@ const server = http.createServer((req, res) => {
                     return attr + '="' + ingressPath + '/' + path + '"';
                 });
                 body = body.replace(/"url"\s*:\s*"\/plugins\//g, '"url":"' + ingressPath + '/plugins/');
+
+                // 聚合包缓存指纹：给 bundler URL 追加 &px=<PROXY_BUNDLE_FIX_REV>，
+                // 使代理改写行为变化后浏览器自动拉取新包（代理转发前会剥离该参数）。
+                // 两种形态都要覆盖：
+                //   1. href/src 属性（HTML 编码，& 写作 &amp;）
+                //   2. 内联 __DSH_BOOT__ 图 JSON 的 "url":"..."（普通 &，rev 可带 -N 后缀；
+                //      模块系统实际按这些 per-module URL 取包，漏掉它们则改写对
+                //      老访客永远不生效）
+                body = body.replace(
+                    /(\/plugins\/\?\?[^"'<>]*?)&amp;rev=([A-Za-z0-9]+)/g,
+                    '$1&amp;rev=$2&amp;px=' + PROXY_BUNDLE_FIX_REV
+                );
+                body = body.replace(
+                    /("url":"[^"]*\/plugins\/\?\?[^"]*?&rev=)([A-Za-z0-9-]+)/g,
+                    '$1$2&px=' + PROXY_BUNDLE_FIX_REV
+                );
 
                 // ===== 通用 Ingress 路径修复脚本 =====
                 // 核心问题：DSH SPA 通过 fetch/WebSocket/XHR/SSE 请求后端，但 HA Ingress
