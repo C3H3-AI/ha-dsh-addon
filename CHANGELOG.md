@@ -2,13 +2,6 @@
 
 本 addon 的版本变更记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [0.2.41] - 2026-09-06
-
-### 修复
-
-- **Ingress 下设置不持久 / "settings are unavailable in this browser"（根因）**：DSH 0.1.2-rc.1 起全部插件 client.js 经 `/plugins/??` 聚合包下发，此前针对独立路径 `dsh-client-connection/client.js` 的 isLoopback 改写从未命中；且 rc.1 的计算形态已变为 `isLoopback: transport?.ownsHost === true || pageLocation === void 0 || isLoopbackHostname(pageLocation.hostname)`（HTML 注入的 hostname 补丁在该判定路径上不生效）。isLoopback=false 时设置持久化后端退化为 "memory"：弹窗状态/语言每次刷新重置，设置型功能（如加载提供方目录）报 "settings are unavailable in this browser"。
-  - 修复：`proxy.js` 对 `/plugins/??` 聚合包与独立路径都做 isLoopback 改写，覆盖 rc.1 新形态与旧形态；聚合包只做精确替换（4MB+ 代码不做宽泛兜底，避免误伤其他插件），未命中时输出上游模式变化告警。实测聚合包内 `isLoopback: true` 替换成功，设置持久化恢复 "host" 后端。
-
 ## [0.2.40] - 2026-09-05
 
 ### 修复

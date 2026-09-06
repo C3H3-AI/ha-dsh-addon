@@ -271,46 +271,27 @@ const server = http.createServer((req, res) => {
         // 在 HA Ingress 下 hostname 是外部反代/Ingress 域名，永远判定为非 loopback。
         // 注入脚本覆盖 Location.prototype.hostname 因浏览器不可配置(Non-configurable)而失效。
         // 因此这里在代理层直接改写该插件模块源码：把 isLoopback 计算替换为常量 true。
-        // DSH 0.1.2-rc.1 起插件 client.js 全部经 /plugins/?? 聚合包下发（不再有独立
-        // 路径），且 isLoopback 计算形态已变为
-        //   isLoopback: transport?.ownsHost === true || pageLocation === void 0
-        //               || isLoopbackHostname(pageLocation.hostname)
-        // 在 HA Ingress 下 hostname 是外部地址 -> isLoopback=false -> 设置持久化后端
-        // 退化为 "memory"，表现为：弹窗状态/语言每次重置、设置型功能报
-        // "settings are unavailable in this browser"。因此对独立路径与聚合包都做改写，
-        // 并同时覆盖新旧两种代码形态，把 isLoopback 强制为 true。
-        // 注意：聚合包的 ?? 在查询串里，pathOnly（按 ? 切分）只剩 /plugins/，
-        // 判断必须用含查询串的 targetPath。
-        if ((pathOnly.endsWith('/plugins/@deepseek-ai/dsh-client-connection/client.js') ||
-             targetPath.includes('/plugins/??')) &&
+        if (pathOnly.endsWith('/plugins/@deepseek-ai/dsh-client-connection/client.js') &&
             (contentType.includes('javascript') || contentType.includes('application/json') || isHtml)) {
             let body = '';
             proxyRes.on('data', (chunk) => { body += chunk.toString(); });
             proxyRes.on('end', () => {
                 if (body.indexOf('isLoopback') !== -1) {
-                    const isBundle = targetPath.includes('/plugins/??');
-                    // rc.1 聚合包形态（精确匹配 handle 构造处的整个表达式）
-                    body = body.replace(
-                        /isLoopback:\s*transport\?\.\s*ownsHost\s*===\s*true\s*\|\|\s*pageLocation\s*===\s*void\s*0\s*\|\|\s*isLoopbackHostname\(\s*pageLocation\.hostname\s*\)/g,
-                        'isLoopback: true'
-                    );
-                    // rc.1 之前的独立 client.js 形态
+                    // 未压缩 ESM 精确替换：isLoopback: (...isLoopbackHostname...) -> isLoopback: true
                     body = body.replace(
                         /isLoopback:\s*pageLocation\s*===\s*void\s*0\s*\|\|\s*isLoopbackHostname\(\s*pageLocation\.hostname\s*\)\s*?[,;}]/g,
                         'isLoopback: true,'
                     );
-                    // 兜底：仅对独立 client.js 做（聚合包数 MB，宽泛替换可能误伤其他插件代码）
-                    if (!/isLoopback:\s*true/.test(body) && !isBundle) {
+                    // 若未命中精确模式，做兜底：将其它任何非 true 的 isLoopback: 赋值强制为 true
+                    if (body.indexOf('isLoopback: true') === -1) {
                         body = body.replace(/isLoopback:\s*(?!true)[^,]+,/g, 'isLoopback: true,');
                     }
-                    if (/isLoopback:\s*true/.test(body)) {
-                        log('[HTTP-' + reqId + ']', isBundle
-                            ? 'aggregated bundle isLoopback forced to true'
-                            : 'dsh-client-connection isLoopback forced to true');
+                    // 降级检测：精确替换 + 兜底替换都未命中 -> 上游 DSH 可能改了变量名/结构
+                    if (body.indexOf('isLoopback: true') === -1) {
+                        log('[HTTP-' + reqId + ']', 'WARNING: DSH client.js isLoopback pattern changed upstream! ' +
+                            'Persistence may be degraded (settings not saved). Please check DSH version.');
                     } else {
-                        log('[HTTP-' + reqId + ']', 'WARNING: DSH isLoopback pattern changed upstream! ' +
-                            'Settings persistence will degrade to memory (dialog/language reset on reload). ' +
-                            'Please check DSH version.');
+                        log('[HTTP-' + reqId + ']', 'dsh-client-connection isLoopback forced to true');
                     }
                 }
                 const headers = cleanHeaders(proxyRes.headers);
