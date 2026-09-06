@@ -97,6 +97,21 @@ async function run() {
 
     await sleep(800);
 
+    // 等待桥接端口就绪（Windows 下 spawn 启动可能超过固定等待时间）
+    for (let i = 0; i < 20; i++) {
+        const up = await new Promise((resolve) => {
+            const req = http.request({ hostname: '127.0.0.1', port: PORT, path: '/api/status', method: 'GET', timeout: 1000 }, (res) => {
+                res.resume();
+                resolve(res.statusCode === 200);
+            });
+            req.on('error', () => resolve(false));
+            req.on('timeout', () => { req.destroy(); resolve(false); });
+            req.end();
+        });
+        if (up) break;
+        await sleep(500);
+    }
+
     try {
         // ===== 1. GET /api/status (public) =====.
         console.log('1. GET /api/status (public, no auth required)');

@@ -135,6 +135,7 @@ function makeDshCookie(secret) {
 // 在 bridge 启动之后），启动时一次性计算会得到空 Cookie 且整进程 401。
 // 改为按需计算 + 失效重试：secret 一旦出现即自动恢复，无需重启 addon。
 let cachedBridgeCookie = process.env.DSH_BRIDGE_COOKIE || '';
+let warnedNoSecret = false;
 function getBridgeCookie() {
   if (cachedBridgeCookie) return cachedBridgeCookie;
   const secret = readBrowserSessionSecret();
@@ -143,7 +144,10 @@ function getBridgeCookie() {
     console.log('[DSH Addon] browser-session cookie generated from persisted secret');
     return cachedBridgeCookie;
   }
-  console.warn('[DSH Addon] WARNING: browser-session secret not available yet (will retry on next RPC)');
+  if (!warnedNoSecret) {
+    warnedNoSecret = true;
+    console.warn('[DSH Addon] WARNING: browser-session secret not available yet (will retry on next RPC)');
+  }
   return '';
 }
 function invalidateBridgeCookie() {
