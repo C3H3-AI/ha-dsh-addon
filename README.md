@@ -29,6 +29,8 @@
 [integration-badge]: https://img.shields.io/badge/integration-0.2.4-4E9AEE.svg?style=flat-square
 [integration-url]: https://github.com/C3H3-AI/ha-dsh-addon/blob/main/custom_components/deepseek_harness/manifest.json
 
+> ⚠️ **当前版本为 BETA**：DSH 上游处于 developer preview（0.1.2-rc.x），本 addon 的适配层（认证注入、ingress 兼容、会话中继）随上游变动快速迭代，功能可能不稳定。遇到问题请先更新 addon 与 DSH 至最新版，并在 issue 中附上 addon 日志。
+
 将 **DeepSeek Harness（DSH）** —— 上游开源的 AI Agent 运行框架（"一切皆插件"）—— 封装为 Home Assistant Addon。
 
 - 通过 HA Ingress 访问 DSH Web UI（无需额外端口暴露）
