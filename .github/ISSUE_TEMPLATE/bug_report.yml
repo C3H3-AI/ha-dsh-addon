@@ -1,0 +1,31 @@
+name: Bug Report
+description: 报告 Addon / 集成 bug
+title: "[Bug] "
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      placeholder: 简明描述 bug
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关日志
+      placeholder: Home Assistant / Addon 日志里相关的 traceback
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      placeholder: manifest.json 或 config.yaml 里的版本号
+    validations:
+      required: true
